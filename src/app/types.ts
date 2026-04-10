@@ -79,8 +79,32 @@ export interface DiagnosticProblem {
   actions: string[];
 }
 
+export type RuleBasedIssue = 'muddy' | 'harsh' | 'buried';
+
+export interface EQRecommendation {
+  freq_range: string;
+  gain: string;
+  reason: string;
+}
+
+export interface RuleDetection {
+  issue: RuleBasedIssue;
+  confidence: number;
+  ratio: number;
+  threshold: number;
+  eq_recommendation: EQRecommendation;
+}
+
+export interface RuleBasedAnalysis {
+  issues: RuleBasedIssue[];
+  eq_recommendations: EQRecommendation[];
+  detections: RuleDetection[];
+}
+
 export interface AnalysisResult {
   problems: DiagnosticProblem[];
+  issues?: RuleBasedIssue[];
+  eq_recommendations?: EQRecommendation[];
   timestamp?: number;
 }
 

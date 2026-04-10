@@ -6,7 +6,6 @@ import type {
   MicrophoneErrorCode,
   MicrophonePermissionState
 } from '../types';
-import { generateMockProblems } from '../data/diagnosticData';
 import {
   appendToCircularBuffer,
   createBufferedAudioSnapshot,
@@ -16,6 +15,11 @@ import {
   resampleMonoBuffer
 } from '../audio/audioUtils';
 import { extractAudioFeatures, logExtractedAudioFeatures } from '../audio/featureExtraction';
+import {
+  analyzeRuleBasedAudioIssues,
+  logRuleBasedAnalysis,
+  ruleAnalysisToDiagnosticProblems
+} from '../audio/ruleBasedAnalysis';
 
 const MONITORING_INTERVAL_MS = 4000;
 const SILENCE_THRESHOLD = 0.012;
@@ -85,26 +89,36 @@ function getAudioContextConstructor(): AudioContextConstructor | null {
     ?? null;
 }
 
-function buildAnalysisResult(snapshot: BufferedAudioSnapshot): AnalysisResult {
+function buildAnalysisResult(
+  snapshot: BufferedAudioSnapshot,
+  features: ExtractedAudioFeatures
+): AnalysisResult {
   if (
     snapshot.samples.length < TARGET_SAMPLE_RATE / 2 ||
     snapshot.rms < SILENCE_THRESHOLD ||
     snapshot.peak < SILENCE_THRESHOLD * 4
   ) {
+    logRuleBasedAnalysis({
+      issues: [],
+      eq_recommendations: [],
+      detections: []
+    });
+
     return {
       problems: [],
+      issues: [],
+      eq_recommendations: [],
       timestamp: Date.now()
     };
   }
 
-  const problemCount = snapshot.peak > 0.85
-    ? 3
-    : snapshot.rms > 0.08 || snapshot.peak > 0.55
-      ? 2
-      : 1;
+  const ruleBasedAnalysis = analyzeRuleBasedAudioIssues(features);
+  logRuleBasedAnalysis(ruleBasedAnalysis);
 
   return {
-    problems: generateMockProblems(problemCount),
+    problems: ruleAnalysisToDiagnosticProblems(ruleBasedAnalysis),
+    issues: ruleBasedAnalysis.issues,
+    eq_recommendations: ruleBasedAnalysis.eq_recommendations,
     timestamp: Date.now()
   };
 }
@@ -175,8 +189,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
   const analyseCurrentBuffer = useCallback((): AnalysisResult => {
     const snapshot = getBufferedAudio();
-    extractCurrentFeatures(snapshot);
-    return buildAnalysisResult(snapshot);
+    const extractedFeatures = extractCurrentFeatures(snapshot);
+    return buildAnalysisResult(snapshot, extractedFeatures);
   }, [extractCurrentFeatures, getBufferedAudio]);
 
   const stopCapture = useCallback(() => {
