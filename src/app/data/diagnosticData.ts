@@ -29,7 +29,7 @@ export const problemCauseMap: Record<ProblemType, DetailedCause[]> = {
     'level_imbalance',
     'tonal_imbalance',
     'bass_overpower',
-    'drums_overpower',
+    'drums_dominance',
     'missing_low_end',
     'missing_high_end'
   ],
@@ -135,7 +135,7 @@ export const causeActionMap: Record<DetailedCause, string[]> = {
     'Reduce bass level',
     'rebalance_levels'
   ],
-  drums_overpower: [
+  drums_dominance: [
     'Reduce drum bus level',
     'Control transients',
     'rebalance_levels'

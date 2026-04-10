@@ -43,7 +43,7 @@ export type DetailedCause =
   | 'level_imbalance'
   | 'tonal_imbalance'
   | 'bass_overpower'
-  | 'drums_overpower'
+  | 'drums_dominance'
   | 'missing_low_end'
   | 'missing_high_end'
   // Secondary
@@ -82,4 +82,16 @@ export interface DiagnosticProblem {
 export interface AnalysisResult {
   problems: DiagnosticProblem[];
   timestamp?: number;
+}
+
+export type MicrophonePermissionState = 'prompt' | 'granted' | 'denied' | 'unsupported';
+
+export type MicrophoneErrorCode = 'denied' | 'not_found' | 'unsupported' | 'unknown' | null;
+
+export interface BufferedAudioSnapshot {
+  samples: Float32Array;
+  sampleRate: number;
+  durationMs: number;
+  rms: number;
+  peak: number;
 }
