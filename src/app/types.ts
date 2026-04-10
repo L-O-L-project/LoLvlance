@@ -95,3 +95,14 @@ export interface BufferedAudioSnapshot {
   rms: number;
   peak: number;
 }
+
+export interface ExtractedAudioFeatures {
+  logMelSpectrogram: Float32Array;
+  logMelSpectrogramShape: [number, number];
+  rms: number;
+  sampleRate: number;
+  fftSize: number;
+  frameSize: number;
+  hopSize: number;
+  melBinCount: number;
+}

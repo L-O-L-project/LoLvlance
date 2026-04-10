@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AnalysisResult,
   BufferedAudioSnapshot,
+  ExtractedAudioFeatures,
   MicrophoneErrorCode,
   MicrophonePermissionState
 } from '../types';
@@ -14,6 +15,7 @@ import {
   TARGET_SAMPLE_RATE,
   resampleMonoBuffer
 } from '../audio/audioUtils';
+import { extractAudioFeatures, logExtractedAudioFeatures } from '../audio/featureExtraction';
 
 const MONITORING_INTERVAL_MS = 4000;
 const SILENCE_THRESHOLD = 0.012;
@@ -110,6 +112,7 @@ function buildAnalysisResult(snapshot: BufferedAudioSnapshot): AnalysisResult {
 export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [latestFeatures, setLatestFeatures] = useState<ExtractedAudioFeatures | null>(null);
   const [permissionState, setPermissionState] = useState<MicrophonePermissionState>('prompt');
   const [permissionError, setPermissionError] = useState<MicrophoneErrorCode>(null);
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
@@ -160,9 +163,21 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     return createBufferedAudioSnapshot(samples);
   }, []);
 
-  const analyseCurrentBuffer = useCallback((): AnalysisResult => {
-    return buildAnalysisResult(getBufferedAudio());
+  const extractCurrentFeatures = useCallback((snapshot?: BufferedAudioSnapshot) => {
+    const bufferedSnapshot = snapshot ?? getBufferedAudio();
+    const extractedFeatures = extractAudioFeatures(bufferedSnapshot);
+
+    setLatestFeatures(extractedFeatures);
+    logExtractedAudioFeatures(extractedFeatures);
+
+    return extractedFeatures;
   }, [getBufferedAudio]);
+
+  const analyseCurrentBuffer = useCallback((): AnalysisResult => {
+    const snapshot = getBufferedAudio();
+    extractCurrentFeatures(snapshot);
+    return buildAnalysisResult(snapshot);
+  }, [extractCurrentFeatures, getBufferedAudio]);
 
   const stopCapture = useCallback(() => {
     setIsCapturing(false);
@@ -451,9 +466,11 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   return {
     analyserNode,
     analyseCurrentBuffer,
+    extractCurrentFeatures,
     getBufferedAudio,
     isCapturing,
     isMonitoring,
+    latestFeatures,
     permissionError,
     permissionState,
     requestMicrophoneAccess: ensureMicrophoneReady,

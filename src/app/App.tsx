@@ -25,6 +25,7 @@ export default function App() {
   const {
     analyserNode,
     analyseCurrentBuffer,
+    latestFeatures,
     permissionError,
     permissionState,
     requestMicrophoneAccess,
@@ -129,6 +130,7 @@ export default function App() {
           <div className="flex-shrink-0 mb-4 flex justify-center">
             <EQVisualization
               analyserNode={analyserNode}
+              featureRms={appState === 'idle' ? null : latestFeatures?.rms ?? null}
               problems={result?.problems || []}
               isLive={appState === 'monitoring' || appState === 'listening'}
               state={appState}

@@ -5,6 +5,7 @@ import { TARGET_SAMPLE_RATE } from '../audio/audioUtils';
 
 interface EQVisualizationProps {
   analyserNode?: AnalyserNode | null;
+  featureRms?: number | null;
   problems: DiagnosticProblem[];
   isLive?: boolean;
   state?: 'idle' | 'listening' | 'result' | 'monitoring';
@@ -37,6 +38,7 @@ const meterScaleLabels = ['0', '-6', '-12', '-18', '-24'];
 
 export function EQVisualization({
   analyserNode = null,
+  featureRms = null,
   problems,
   isLive = false,
   state = 'idle'
@@ -153,6 +155,7 @@ export function EQVisualization({
         meterCanvas.getBoundingClientRect().width,
         meterCanvas.getBoundingClientRect().height,
         outputLevel,
+        featureRms,
         outputPeakHoldRef,
         deltaSeconds
       );
@@ -171,7 +174,7 @@ export function EQVisualization({
       }
       lastFrameTimeRef.current = 0;
     };
-  }, [adjustmentBands, analyserNode, isActive, state]);
+  }, [adjustmentBands, analyserNode, featureRms, isActive, state]);
 
   return (
     <motion.div
@@ -318,7 +321,7 @@ export function EQVisualization({
           <div className="rounded-md border border-lime-500/15 bg-[#040607] px-1.5 py-1.5">
             <div className="flex flex-col justify-between h-full">
               <div className="text-[8px] font-mono text-center uppercase tracking-[0.16em] text-gray-400">
-                Out
+                RMS
               </div>
 
               <div className="relative h-24">
@@ -526,6 +529,7 @@ function drawOutputMeter(
   width: number,
   height: number,
   level: number,
+  featureRms: number | null,
   peakHoldRef: { current: number },
   deltaSeconds: number
 ) {
@@ -551,6 +555,12 @@ function drawOutputMeter(
   const peakY = height - peakHoldRef.current * height;
   context.fillStyle = 'rgba(255, 255, 255, 0.9)';
   context.fillRect(0, clamp(peakY, 1, height - 2), width, 1.5);
+
+  if (featureRms !== null) {
+    const rmsY = height - clamp(featureRms, 0, 1) * height;
+    context.fillStyle = 'rgba(34, 211, 238, 0.9)';
+    context.fillRect(0, clamp(rmsY, 1, height - 2), width, 1.5);
+  }
 }
 
 function getMeterSegmentColor(segmentIndex: number, segmentCount: number, isLit: boolean) {
