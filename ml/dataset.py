@@ -10,15 +10,17 @@ from typing import Iterable
 import torch
 from torch.utils.data import Dataset
 
-from .preprocessing import (
-    AudioFeatures,
-    PreprocessingConfig,
-    extract_audio_features_from_path,
-)
+try:
+    from .label_schema import ISSUE_LABELS, SCHEMA_VERSION, SOURCE_HINT_TERMS, SOURCE_LABELS
+    from .preprocessing import AudioFeatures, PreprocessingConfig, extract_audio_features_from_path
+except ImportError:
+    from label_schema import ISSUE_LABELS, SCHEMA_VERSION, SOURCE_HINT_TERMS, SOURCE_LABELS
+    from preprocessing import AudioFeatures, PreprocessingConfig, extract_audio_features_from_path
 
-PROBLEM_LABELS = ("muddy", "harsh", "buried")
 AUDIO_EXTENSIONS = {".wav", ".flac", ".ogg", ".mp3"}
-VOCAL_HINT_TERMS = {"singer", "singing", "song", "speech", "vocal", "vocals", "choir"}
+ISSUE_LABEL_QUALITY = "weak"
+SOURCE_LABEL_QUALITY = "weak"
+UNAVAILABLE_LABEL_QUALITY = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,37 @@ class DatasetRoots:
     fsd50k: Path | None = None
 
 
+@dataclass
+class SourceAnnotation:
+    values: dict[str, float]
+    mask: dict[str, float]
+    quality: dict[str, str]
+    evidence: dict[str, list[str]]
+    support: str
+
+    @classmethod
+    def empty(cls) -> "SourceAnnotation":
+        return cls(
+            values={label: 0.0 for label in SOURCE_LABELS},
+            mask={label: 0.0 for label in SOURCE_LABELS},
+            quality={label: UNAVAILABLE_LABEL_QUALITY for label in SOURCE_LABELS},
+            evidence={label: [] for label in SOURCE_LABELS},
+            support="unavailable",
+        )
+
+    def merge(self, other: "SourceAnnotation") -> "SourceAnnotation":
+        merged = SourceAnnotation.empty()
+        merged.support = choose_stronger_support(self.support, other.support)
+
+        for label in SOURCE_LABELS:
+            merged.values[label] = max(self.values[label], other.values[label])
+            merged.mask[label] = max(self.mask[label], other.mask[label])
+            merged.quality[label] = choose_label_quality(self.quality[label], other.quality[label], merged.mask[label])
+            merged.evidence[label] = unique_in_order([*self.evidence[label], *other.evidence[label]])
+
+        return merged
+
+
 class LoLvlanceAudioDataset(Dataset[dict[str, torch.Tensor]]):
     def __init__(
         self,
@@ -37,9 +70,7 @@ class LoLvlanceAudioDataset(Dataset[dict[str, torch.Tensor]]):
         preprocessing_config: PreprocessingConfig | None = None,
     ) -> None:
         self.preprocessing_config = preprocessing_config or PreprocessingConfig()
-        self.entries = [
-            entry for entry in load_manifest(manifest_path) if entry["split"] == split
-        ]
+        self.entries = [entry for entry in load_manifest(manifest_path) if entry["split"] == split]
 
         if not self.entries:
             raise ValueError(f"No entries found for split '{split}' in {manifest_path}.")
@@ -58,7 +89,10 @@ class LoLvlanceAudioDataset(Dataset[dict[str, torch.Tensor]]):
 
         return {
             "log_mel_spectrogram": torch.from_numpy(features.log_mel_spectrogram).float(),
-            "labels": torch.tensor(entry["label_vector"], dtype=torch.float32),
+            "issue_targets": torch.tensor(entry["issue_targets"]["values"], dtype=torch.float32),
+            "issue_target_mask": torch.tensor(entry["issue_targets"]["mask"], dtype=torch.float32),
+            "source_targets": torch.tensor(entry["source_targets"]["values"], dtype=torch.float32),
+            "source_target_mask": torch.tensor(entry["source_targets"]["mask"], dtype=torch.float32),
         }
 
 
@@ -75,23 +109,25 @@ def build_public_manifest(
 
     entries: list[dict] = []
     entries.extend(
-        scan_openmic(
+        scan_dataset_root(
             dataset_roots.openmic,
+            dataset_name="openmic",
             config=config,
             clips_per_file=clips_per_file,
             max_files=max_files_per_dataset,
         )
     )
     entries.extend(
-        scan_slakh(
+        scan_dataset_root(
             dataset_roots.slakh,
+            dataset_name="slakh",
             config=config,
             clips_per_file=clips_per_file,
             max_files=max_files_per_dataset,
         )
     )
     entries.extend(
-        scan_generic_dataset(
+        scan_dataset_root(
             dataset_roots.musan,
             dataset_name="musan",
             config=config,
@@ -100,7 +136,7 @@ def build_public_manifest(
         )
     )
     entries.extend(
-        scan_generic_dataset(
+        scan_dataset_root(
             dataset_roots.fsd50k,
             dataset_name="fsd50k",
             config=config,
@@ -119,104 +155,7 @@ def build_public_manifest(
     return entries
 
 
-def load_manifest(manifest_path: str | Path) -> list[dict]:
-    manifest = Path(manifest_path)
-
-    with manifest.open("r", encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
-
-
-def summarize_manifest(entries: Iterable[dict]) -> dict[str, object]:
-    entries = list(entries)
-    split_counts: dict[str, int] = {}
-    positive_counts = {label: 0 for label in PROBLEM_LABELS}
-
-    for entry in entries:
-        split_counts[entry["split"]] = split_counts.get(entry["split"], 0) + 1
-
-        for label, value in zip(PROBLEM_LABELS, entry["label_vector"]):
-            if value >= 0.5:
-                positive_counts[label] += 1
-
-    return {
-        "total": len(entries),
-        "splits": split_counts,
-        "positives": positive_counts,
-    }
-
-
-def scan_openmic(
-    root: Path | None,
-    config: PreprocessingConfig,
-    clips_per_file: int,
-    max_files: int | None,
-) -> list[dict]:
-    if root is None or not root.exists():
-        return []
-
-    vocal_hints = load_vocal_hints_from_csv(root)
-    audio_files = collect_audio_files(root)
-    if max_files is not None:
-        audio_files = audio_files[:max_files]
-
-    entries: list[dict] = []
-
-    for audio_path in audio_files:
-        sample_id = normalize_clip_id(audio_path)
-        vocal_hint = vocal_hints.get(sample_id, filename_has_vocal_hint(audio_path))
-        entries.extend(
-            build_entries_for_file(
-                audio_path=audio_path,
-                dataset_name="openmic",
-                config=config,
-                clips_per_file=clips_per_file,
-                vocal_hint=vocal_hint,
-            )
-        )
-
-    return entries
-
-
-def scan_slakh(
-    root: Path | None,
-    config: PreprocessingConfig,
-    clips_per_file: int,
-    max_files: int | None,
-) -> list[dict]:
-    if root is None or not root.exists():
-        return []
-
-    mix_files = [
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in AUDIO_EXTENSIONS
-        and path.stem.lower() == "mix"
-    ]
-    mix_files.sort()
-    if max_files is not None:
-        mix_files = mix_files[:max_files]
-
-    entries: list[dict] = []
-
-    for mix_path in mix_files:
-        stem_dir = mix_path.parent / "stems"
-        stem_paths = collect_audio_files(stem_dir) if stem_dir.exists() else []
-        entries.extend(
-            build_entries_for_file(
-                audio_path=mix_path,
-                dataset_name="slakh",
-                config=config,
-                clips_per_file=clips_per_file,
-                vocal_hint=False,
-                stem_paths=stem_paths[:8],
-            )
-        )
-
-    return entries
-
-
-def scan_generic_dataset(
+def scan_dataset_root(
     root: Path | None,
     dataset_name: str,
     config: PreprocessingConfig,
@@ -226,23 +165,42 @@ def scan_generic_dataset(
     if root is None or not root.exists():
         return []
 
-    vocal_hints = load_vocal_hints_from_csv(root)
-    audio_files = collect_audio_files(root)
+    csv_annotations = load_source_annotations_from_csv(root)
+
+    if dataset_name == "slakh":
+        audio_files = [
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in AUDIO_EXTENSIONS
+            and path.stem.lower() == "mix"
+        ]
+    else:
+        audio_files = collect_audio_files(root)
+
+    audio_files.sort()
     if max_files is not None:
         audio_files = audio_files[:max_files]
 
     entries: list[dict] = []
 
     for audio_path in audio_files:
-        sample_id = normalize_clip_id(audio_path)
-        vocal_hint = vocal_hints.get(sample_id, filename_has_vocal_hint(audio_path))
+        clip_id = normalize_clip_id(audio_path)
+        csv_annotation = csv_annotations.get(clip_id, SourceAnnotation.empty())
+        stem_paths = []
+
+        if dataset_name == "slakh":
+            stem_dir = audio_path.parent / "stems"
+            stem_paths = collect_audio_files(stem_dir) if stem_dir.exists() else []
+
         entries.extend(
             build_entries_for_file(
                 audio_path=audio_path,
                 dataset_name=dataset_name,
                 config=config,
                 clips_per_file=clips_per_file,
-                vocal_hint=vocal_hint,
+                csv_annotation=csv_annotation,
+                stem_paths=stem_paths,
             )
         )
 
@@ -254,7 +212,7 @@ def build_entries_for_file(
     dataset_name: str,
     config: PreprocessingConfig,
     clips_per_file: int,
-    vocal_hint: bool,
+    csv_annotation: SourceAnnotation,
     stem_paths: list[Path] | None = None,
 ) -> list[dict]:
     import soundfile as sf
@@ -262,7 +220,14 @@ def build_entries_for_file(
     audio_info = sf.info(audio_path)
     duration_seconds = float(audio_info.frames) / float(audio_info.samplerate)
     starts = choose_segment_starts(duration_seconds, config.clip_seconds, clips_per_file)
-
+    track_group_id = infer_track_group_id(audio_path, dataset_name)
+    split = infer_split(audio_path, track_group_id)
+    filename_annotation = infer_source_annotation_from_path(audio_path, support="filename_partial")
+    stem_annotation = infer_source_annotation_from_stems(stem_paths or [])
+    combined_annotation = csv_annotation.merge(filename_annotation).merge(stem_annotation)
+    vocal_hint = combined_annotation.values["vocal"] > 0.5 or any(
+        "vocal" in evidence or "singer" in evidence for evidence in combined_annotation.evidence["vocal"]
+    )
     entries: list[dict] = []
 
     for clip_index, start_seconds in enumerate(starts):
@@ -282,36 +247,55 @@ def build_entries_for_file(
             clip_duration=config.clip_seconds,
             config=config,
         )
-        label_vector = infer_problem_labels(
+        issue_values, issue_reasons = infer_issue_targets(
             dataset_name=dataset_name,
             features=features,
             vocal_hint=vocal_hint,
             low_mid_overlap=low_mid_overlap,
             path=audio_path,
         )
-        split = infer_split(audio_path)
-        clip_id = f"{dataset_name}:{normalize_clip_id(audio_path)}:{clip_index}"
 
         entries.append(
             {
-                "clip_id": clip_id,
+                "schema_version": SCHEMA_VERSION,
+                "clip_id": f"{dataset_name}:{track_group_id}:{clip_index}",
+                "track_group_id": track_group_id,
                 "dataset": dataset_name,
                 "audio_path": audio_path.resolve().as_posix(),
                 "start_seconds": round(start_seconds, 3),
                 "duration_seconds": config.clip_seconds,
                 "split": split,
-                "label_vector": label_vector,
-                "positive_labels": [
-                    label for label, value in zip(PROBLEM_LABELS, label_vector) if value >= 0.5
-                ],
-                "vocal_hint": vocal_hint,
-                "stats": {
-                    "rms": round(features.rms, 6),
-                    "centroid_hz": round(features.spectral_centroid_hz, 2),
-                    "low_mid_ratio": round(features.low_mid_ratio, 4),
-                    "presence_ratio": round(features.presence_ratio, 4),
-                    "harsh_ratio": round(features.harsh_ratio, 4),
-                    "low_mid_overlap": low_mid_overlap,
+                "issue_targets": {
+                    "labels": list(ISSUE_LABELS),
+                    "values": [issue_values[label] for label in ISSUE_LABELS],
+                    "mask": [1.0 for _ in ISSUE_LABELS],
+                    "quality": [ISSUE_LABEL_QUALITY for _ in ISSUE_LABELS],
+                },
+                "source_targets": {
+                    "labels": list(SOURCE_LABELS),
+                    "values": [combined_annotation.values[label] for label in SOURCE_LABELS],
+                    "mask": [combined_annotation.mask[label] for label in SOURCE_LABELS],
+                    "quality": [combined_annotation.quality[label] for label in SOURCE_LABELS],
+                },
+                "metadata": {
+                    "vocal_hint": vocal_hint,
+                    "issue_reasons": issue_reasons,
+                    "source_evidence": combined_annotation.evidence,
+                    "source_support": combined_annotation.support,
+                    "features": {
+                        "rms": round(features.rms, 6),
+                        "centroid_hz": round(features.spectral_centroid_hz, 2),
+                        "rolloff_hz": round(features.spectral_rolloff_hz, 2),
+                        "boom_ratio": round(features.boom_ratio, 4),
+                        "low_mid_ratio": round(features.low_mid_ratio, 4),
+                        "boxy_ratio": round(features.boxy_ratio, 4),
+                        "presence_ratio": round(features.presence_ratio, 4),
+                        "harsh_ratio": round(features.harsh_ratio, 4),
+                        "nasal_ratio": round(features.nasal_ratio, 4),
+                        "sibilant_ratio": round(features.sibilant_ratio, 4),
+                        "air_ratio": round(features.air_ratio, 4),
+                        "low_mid_overlap": low_mid_overlap,
+                    },
                 },
             }
         )
@@ -319,36 +303,60 @@ def build_entries_for_file(
     return entries
 
 
-def infer_problem_labels(
+def infer_issue_targets(
     dataset_name: str,
     features: AudioFeatures,
     vocal_hint: bool,
     low_mid_overlap: int,
     path: Path,
-) -> list[float]:
-    harsh_keyword = any(term in normalize_text(path.as_posix()) for term in ("alarm", "siren", "scream", "crash"))
-    muddy_keyword = any(term in normalize_text(path.as_posix()) for term in ("bass", "organ", "piano", "guitar", "keys"))
+) -> tuple[dict[str, float], dict[str, list[str]]]:
+    normalized_path = normalize_text(path.as_posix())
+    harsh_keyword = any(term in normalized_path for term in ("alarm", "siren", "scream", "crash", "noise"))
+    muddy_keyword = any(term in normalized_path for term in ("bass", "organ", "piano", "guitar", "keys"))
 
-    muddy = features.low_mid_ratio >= 0.24 or low_mid_overlap >= 2
-    harsh = features.harsh_ratio >= 0.16 or features.spectral_centroid_hz >= 2_600.0 or harsh_keyword
-    buried = vocal_hint and features.presence_ratio <= 0.18 and features.rms >= 0.005
+    values = {label: 0.0 for label in ISSUE_LABELS}
+    reasons = {label: [] for label in ISSUE_LABELS}
 
-    if dataset_name == "slakh":
-        muddy = muddy or low_mid_overlap >= 2
+    def activate(label: str, *why: str) -> None:
+        values[label] = 1.0
+        reasons[label] = unique_in_order([*reasons[label], *why])
 
-    if dataset_name == "musan":
-        harsh = harsh or "noise" in normalize_text(path.as_posix())
+    if features.low_mid_ratio >= 0.24 or low_mid_overlap >= 2 or (muddy_keyword and features.low_mid_ratio >= 0.2):
+        activate("muddy", "low_mid_ratio_high", "harmonic_overlap")
 
-    if dataset_name == "fsd50k":
-        harsh = harsh or harsh_keyword
+    if features.harsh_ratio >= 0.16 or features.spectral_centroid_hz >= 2_600.0 or harsh_keyword:
+        activate("harsh", "upper_band_energy_high", "spectral_centroid_high")
 
-    if dataset_name == "openmic":
-        buried = buried or (vocal_hint and features.low_mid_ratio >= 0.22 and features.presence_ratio <= 0.2)
+    if vocal_hint and features.presence_ratio <= 0.18 and features.rms >= 0.005:
+        activate("buried", "vocal_present", "presence_band_low")
 
-    if muddy_keyword and features.low_mid_ratio >= 0.2:
-        muddy = True
+    if features.boom_ratio >= 0.22 and (features.spectral_centroid_hz <= 2_000.0 or low_mid_overlap >= 1):
+        activate("boomy", "low_end_ratio_high")
 
-    return [float(muddy), float(harsh), float(buried)]
+    if features.boom_ratio <= 0.08 and features.low_mid_ratio <= 0.17 and features.rms >= 0.005:
+        activate("thin", "low_end_ratio_low")
+
+    if features.boxy_ratio >= 0.24 and features.low_mid_ratio >= 0.2:
+        activate("boxy", "boxy_band_high")
+
+    if vocal_hint and features.nasal_ratio >= 0.22 and features.presence_ratio <= 0.28:
+        activate("nasal", "nasal_band_high", "vocal_present")
+
+    if vocal_hint and features.sibilant_ratio >= 0.1 and features.harsh_ratio >= 0.12:
+        activate("sibilant", "sibilant_band_high", "vocal_present")
+
+    if features.air_ratio <= 0.035 and features.spectral_rolloff_hz <= 2_200.0 and features.rms >= 0.005:
+        activate("dull", "high_end_rolloff_low")
+
+    if dataset_name == "slakh" and low_mid_overlap >= 2:
+        activate("muddy", "stem_overlap")
+        if features.boom_ratio >= 0.18:
+            activate("boomy", "stem_overlap_low_end")
+
+    if dataset_name == "openmic" and vocal_hint and features.low_mid_ratio >= 0.22 and features.presence_ratio <= 0.2:
+        activate("buried", "vocal_present", "low_presence_contrast")
+
+    return values, reasons
 
 
 def estimate_low_mid_overlap(
@@ -376,32 +384,47 @@ def estimate_low_mid_overlap(
     return overlap_count
 
 
-def choose_segment_starts(duration_seconds: float, clip_duration: float, clips_per_file: int) -> list[float]:
-    if duration_seconds <= clip_duration or clips_per_file <= 1:
-        return [0.0]
+def summarize_manifest(entries: Iterable[dict]) -> dict[str, object]:
+    entries = list(entries)
+    split_counts: dict[str, int] = {}
+    issue_positives = {label: 0 for label in ISSUE_LABELS}
+    source_support = {label: 0.0 for label in SOURCE_LABELS}
+    source_positives = {label: 0.0 for label in SOURCE_LABELS}
 
-    available = max(0.0, duration_seconds - clip_duration)
-    if clips_per_file == 2:
-        return [0.0, available]
+    for entry in entries:
+        split_counts[entry["split"]] = split_counts.get(entry["split"], 0) + 1
 
-    return [available * (index / (clips_per_file - 1)) for index in range(clips_per_file)]
+        for label, value in zip(ISSUE_LABELS, entry["issue_targets"]["values"]):
+            if value >= 0.5:
+                issue_positives[label] += 1
+
+        for label, mask, value in zip(
+            SOURCE_LABELS,
+            entry["source_targets"]["mask"],
+            entry["source_targets"]["values"],
+        ):
+            source_support[label] += float(mask)
+            source_positives[label] += float(value * mask)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "total": len(entries),
+        "splits": split_counts,
+        "issue_positives": issue_positives,
+        "source_support": {label: round(source_support[label], 2) for label in SOURCE_LABELS},
+        "source_positives": {label: round(source_positives[label], 2) for label in SOURCE_LABELS},
+    }
 
 
-def collect_audio_files(root: Path | None) -> list[Path]:
-    if root is None or not root.exists():
-        return []
+def load_manifest(manifest_path: str | Path) -> list[dict]:
+    manifest = Path(manifest_path)
 
-    paths = [
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
-    ]
-    paths.sort()
-    return paths
+    with manifest.open("r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
-def load_vocal_hints_from_csv(root: Path) -> dict[str, bool]:
-    hints: dict[str, bool] = {}
+def load_source_annotations_from_csv(root: Path) -> dict[str, SourceAnnotation]:
+    annotations: dict[str, SourceAnnotation] = {}
 
     for csv_path in sorted(root.rglob("*.csv")):
         try:
@@ -419,56 +442,217 @@ def load_vocal_hints_from_csv(root: Path) -> dict[str, bool]:
                     ),
                     None,
                 )
-                vocal_fields = [
-                    original
-                    for original, lowered in zip(reader.fieldnames, fieldnames)
-                    if any(term in lowered for term in VOCAL_HINT_TERMS)
-                    or lowered in {"label", "labels", "tag", "tags"}
-                ]
 
-                if id_field is None or not vocal_fields:
+                if id_field is None:
                     continue
 
+                grouped_fields = {
+                    source_label: [
+                        original
+                        for original, lowered in zip(reader.fieldnames, fieldnames)
+                        if lowered not in {"label", "labels", "tag", "tags", "category", "categories"}
+                        and any(term in lowered for term in SOURCE_HINT_TERMS[source_label])
+                    ]
+                    for source_label in SOURCE_LABELS
+                }
+                generic_tag_fields = [
+                    original
+                    for original, lowered in zip(reader.fieldnames, fieldnames)
+                    if lowered in {"label", "labels", "tag", "tags", "category", "categories"}
+                ]
+
                 for row in reader:
-                    clip_id = normalize_clip_id(Path(row[id_field]))
-                    hint = any(is_truthy(row.get(field, "")) for field in vocal_fields)
-                    if hint:
-                        hints[clip_id] = True
+                    clip_id = normalize_clip_id(row.get(id_field, ""))
+                    if not clip_id:
+                        continue
+
+                    row_annotation = SourceAnnotation.empty()
+                    row_annotation.support = "unavailable"
+
+                    for source_label, source_fields in grouped_fields.items():
+                        if not source_fields:
+                            continue
+
+                        row_annotation.mask[source_label] = 1.0
+                        row_annotation.quality[source_label] = SOURCE_LABEL_QUALITY
+                        row_annotation.support = choose_stronger_support(row_annotation.support, "csv_structured")
+                        values = [row.get(field, "") for field in source_fields]
+                        is_present = any(is_truthy(value) for value in values)
+                        row_annotation.values[source_label] = 1.0 if is_present else 0.0
+                        if is_present:
+                            row_annotation.evidence[source_label] = unique_in_order(
+                                [*row_annotation.evidence[source_label], *[str(value) for value in values if str(value).strip()]]
+                            )
+
+                    if generic_tag_fields:
+                        tag_text = " ".join(str(row.get(field, "")) for field in generic_tag_fields).strip()
+                        if tag_text:
+                            tag_hits = detect_source_labels_in_text(tag_text)
+                            for source_label in SOURCE_LABELS:
+                                row_annotation.mask[source_label] = 1.0
+                                row_annotation.quality[source_label] = SOURCE_LABEL_QUALITY
+                                if source_label in tag_hits:
+                                    row_annotation.values[source_label] = 1.0
+                                    row_annotation.evidence[source_label] = unique_in_order(
+                                        [*row_annotation.evidence[source_label], tag_text]
+                                    )
+                            row_annotation.support = choose_stronger_support(row_annotation.support, "csv_tags")
+
+                    annotations[clip_id] = annotations.get(clip_id, SourceAnnotation.empty()).merge(row_annotation)
         except UnicodeDecodeError:
             continue
 
-    return hints
+    return annotations
 
 
-def infer_split(path: Path) -> str:
-    lowered_parts = {part.lower() for part in path.parts}
+def infer_source_annotation_from_path(audio_path: Path, support: str) -> SourceAnnotation:
+    annotation = SourceAnnotation.empty()
+    normalized = normalize_text(audio_path.as_posix())
+    positives = detect_source_labels_in_text(normalized)
 
-    if lowered_parts & {"valid", "validation", "val", "test", "eval"}:
+    if not positives:
+        return annotation
+
+    annotation.support = support
+
+    for source_label in positives:
+        annotation.values[source_label] = 1.0
+        annotation.mask[source_label] = 1.0
+        annotation.quality[source_label] = SOURCE_LABEL_QUALITY
+        annotation.evidence[source_label] = [audio_path.name]
+
+    return annotation
+
+
+def infer_source_annotation_from_stems(stem_paths: list[Path]) -> SourceAnnotation:
+    annotation = SourceAnnotation.empty()
+
+    for stem_path in stem_paths:
+        positives = detect_source_labels_in_text(normalize_text(stem_path.as_posix()))
+
+        for source_label in positives:
+            annotation.values[source_label] = 1.0
+            annotation.mask[source_label] = 1.0
+            annotation.quality[source_label] = SOURCE_LABEL_QUALITY
+            annotation.evidence[source_label] = unique_in_order([*annotation.evidence[source_label], stem_path.name])
+
+    if any(annotation.mask[label] > 0 for label in SOURCE_LABELS):
+        annotation.support = "stems_partial"
+
+    return annotation
+
+
+def detect_source_labels_in_text(value: str) -> list[str]:
+    normalized = normalize_text(value)
+    hits: list[str] = []
+
+    for source_label, terms in SOURCE_HINT_TERMS.items():
+        if any(term in normalized for term in terms):
+            hits.append(source_label)
+
+    return hits
+
+
+def choose_segment_starts(duration_seconds: float, clip_duration: float, clips_per_file: int) -> list[float]:
+    if duration_seconds <= clip_duration or clips_per_file <= 1:
+        return [0.0]
+
+    available = max(0.0, duration_seconds - clip_duration)
+    if clips_per_file == 2:
+        return [0.0, available]
+
+    return [available * (index / (clips_per_file - 1)) for index in range(clips_per_file)]
+
+
+def collect_audio_files(root: Path | None) -> list[Path]:
+    if root is None or not root.exists():
+        return []
+
+    paths = [path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS]
+    paths.sort()
+    return paths
+
+
+def infer_track_group_id(audio_path: Path, dataset_name: str) -> str:
+    lowered_parts = [part.lower() for part in audio_path.parts]
+
+    if dataset_name == "slakh":
+        for part in reversed(audio_path.parts[:-1]):
+            lowered = part.lower()
+            if lowered.startswith("track") or lowered not in {"train", "validation", "valid", "val", "test"}:
+                return f"{dataset_name}:{normalize_text(part)}"
+
+    return f"{dataset_name}:{normalize_clip_id(audio_path)}"
+
+
+def infer_split(audio_path: Path, track_group_id: str) -> str:
+    lowered_parts = {part.lower() for part in audio_path.parts}
+
+    if lowered_parts & {"test", "eval"}:
+        return "test"
+
+    if lowered_parts & {"valid", "validation", "val"}:
         return "val"
 
     if lowered_parts & {"train", "training", "dev"}:
         return "train"
 
-    digest = hashlib.md5(path.as_posix().encode("utf-8")).hexdigest()
+    digest = hashlib.md5(track_group_id.encode("utf-8")).hexdigest()
     return "val" if int(digest[:2], 16) < 51 else "train"
 
 
 def normalize_clip_id(path_like: str | Path) -> str:
+    if not path_like:
+        return ""
     path = Path(path_like)
     return normalize_text(path.stem)
-
-
-def filename_has_vocal_hint(path: Path) -> bool:
-    normalized = normalize_text(path.as_posix())
-    return any(term in normalized for term in VOCAL_HINT_TERMS)
 
 
 def normalize_text(value: str) -> str:
     return value.lower().replace("-", "_").replace(" ", "_")
 
 
-def is_truthy(value: str) -> bool:
+def is_truthy(value: str | float | int) -> bool:
     normalized = normalize_text(str(value))
-    return normalized in {"1", "true", "yes", "y", "present", "vocal", "vocals", "singer"} or any(
-        term in normalized for term in VOCAL_HINT_TERMS
-    )
+
+    if normalized in {"1", "true", "yes", "y", "present"}:
+        return True
+
+    try:
+        return float(normalized) > 0.0
+    except ValueError:
+        return any(term in normalized for terms in SOURCE_HINT_TERMS.values() for term in terms)
+
+
+def choose_stronger_support(left: str, right: str) -> str:
+    support_priority = {
+        "unavailable": 0,
+        "filename_partial": 1,
+        "stems_partial": 2,
+        "csv_tags": 3,
+        "csv_structured": 4,
+    }
+    return left if support_priority[left] >= support_priority[right] else right
+
+
+def choose_label_quality(left: str, right: str, mask_value: float) -> str:
+    if mask_value <= 0:
+        return UNAVAILABLE_LABEL_QUALITY
+
+    if "reviewed" in {left, right}:
+        return "reviewed"
+
+    return SOURCE_LABEL_QUALITY
+
+
+def unique_in_order(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+
+    return unique

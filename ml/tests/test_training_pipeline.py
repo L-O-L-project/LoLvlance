@@ -35,6 +35,8 @@ class TrainingPipelineTest(unittest.TestCase):
                 learning_rate=1e-3,
                 weight_decay=1e-4,
                 dropout=0.1,
+                issue_loss_weight=1.0,
+                source_loss_weight=0.5,
                 num_workers=0,
                 seed=7,
                 checkpoint_dir=checkpoint_dir,
@@ -47,9 +49,14 @@ class TrainingPipelineTest(unittest.TestCase):
 
             self.assertTrue(best_checkpoint_path.exists())
             self.assertEqual(summary["device"], "cpu")
+            self.assertIn("issue_head", summary["tuned_metrics"])
+            self.assertIn("source_head", summary["tuned_metrics"])
 
             manifest_entries = load_manifest(manifest_path)
             self.assertGreaterEqual(len(manifest_entries), 6)
+            self.assertIn("issue_targets", manifest_entries[0])
+            self.assertIn("source_targets", manifest_entries[0])
+            self.assertIn("track_group_id", manifest_entries[0])
 
             val_dataset = LoLvlanceAudioDataset(manifest_path=manifest_path, split="val")
             sample = val_dataset[0]["log_mel_spectrogram"].unsqueeze(0).numpy()
@@ -65,20 +72,15 @@ class TrainingPipelineTest(unittest.TestCase):
             )
             export_to_onnx(export_args)
 
-            self.assertTrue(onnx_path.exists())
-
-            session = ort.InferenceSession(
-                onnx_path.as_posix(),
-                providers=["CPUExecutionProvider"],
-            )
-            outputs = session.run(None, {"log_mel_spectrogram": sample})
-            self.assertEqual(outputs[0].shape, (1, 3))
+            session = ort.InferenceSession(onnx_path.as_posix(), providers=["CPUExecutionProvider"])
+            issue_probs, source_probs = session.run(None, {"log_mel_spectrogram": sample})
+            self.assertEqual(issue_probs.shape[1], 9)
+            self.assertEqual(source_probs.shape[1], 5)
 
 
 def create_fake_public_datasets(root: Path) -> dict[str, Path]:
     sample_rate = 16_000
     duration_seconds = 4.0
-
     openmic_root = root / "openmic"
     slakh_root = root / "slakh"
     musan_root = root / "musan"
@@ -87,25 +89,42 @@ def create_fake_public_datasets(root: Path) -> dict[str, Path]:
     write_wave(openmic_root / "train" / "audio" / "buried_train.wav", [220.0, 330.0], sample_rate, duration_seconds)
     write_wave(openmic_root / "validation" / "audio" / "buried_val.wav", [240.0, 360.0], sample_rate, duration_seconds)
     with (openmic_root / "openmic_labels.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["sample_key", "singer"])
+        writer = csv.DictWriter(handle, fieldnames=["sample_key", "singer", "guitar"])
         writer.writeheader()
-        writer.writerow({"sample_key": "buried_train", "singer": "1"})
-        writer.writerow({"sample_key": "buried_val", "singer": "1"})
+        writer.writerow({"sample_key": "buried_train", "singer": "1", "guitar": "0"})
+        writer.writerow({"sample_key": "buried_val", "singer": "1", "guitar": "0"})
 
     slakh_train = slakh_root / "train" / "Track000"
     slakh_val = slakh_root / "validation" / "Track001"
-    write_wave(slakh_train / "stems" / "stem_01.wav", [260.0], sample_rate, duration_seconds)
-    write_wave(slakh_train / "stems" / "stem_02.wav", [420.0], sample_rate, duration_seconds)
-    write_wave(slakh_train / "mix.wav", [260.0, 420.0], sample_rate, duration_seconds)
-    write_wave(slakh_val / "stems" / "stem_01.wav", [280.0], sample_rate, duration_seconds)
-    write_wave(slakh_val / "stems" / "stem_02.wav", [440.0], sample_rate, duration_seconds)
-    write_wave(slakh_val / "mix.wav", [280.0, 440.0], sample_rate, duration_seconds)
+    write_wave(slakh_train / "stems" / "bass_stem.wav", [90.0], sample_rate, duration_seconds)
+    write_wave(slakh_train / "stems" / "guitar_stem.wav", [420.0], sample_rate, duration_seconds)
+    write_wave(slakh_train / "mix.wav", [90.0, 420.0], sample_rate, duration_seconds)
+    write_wave(slakh_val / "stems" / "bass_stem.wav", [110.0], sample_rate, duration_seconds)
+    write_wave(slakh_val / "stems" / "guitar_stem.wav", [460.0], sample_rate, duration_seconds)
+    write_wave(slakh_val / "mix.wav", [110.0, 460.0], sample_rate, duration_seconds)
 
-    write_wave(musan_root / "train" / "noise" / "harsh_noise_train.wav", [5_500.0, 6_800.0], sample_rate, duration_seconds, noise=0.01)
-    write_wave(musan_root / "validation" / "noise" / "harsh_noise_val.wav", [5_200.0, 6_400.0], sample_rate, duration_seconds, noise=0.01)
+    write_wave(
+        musan_root / "train" / "noise" / "harsh_noise_train.wav",
+        [5_500.0, 6_800.0],
+        sample_rate,
+        duration_seconds,
+        noise=0.01,
+    )
+    write_wave(
+        musan_root / "validation" / "noise" / "harsh_noise_val.wav",
+        [5_200.0, 6_400.0],
+        sample_rate,
+        duration_seconds,
+        noise=0.01,
+    )
 
     write_wave(fsd50k_root / "train" / "neutral_train.wav", [1_100.0], sample_rate, duration_seconds)
     write_wave(fsd50k_root / "validation" / "neutral_val.wav", [1_300.0], sample_rate, duration_seconds)
+    with (fsd50k_root / "annotations.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["fname", "labels"])
+        writer.writeheader()
+        writer.writerow({"fname": "neutral_train", "labels": "piano"})
+        writer.writerow({"fname": "neutral_val", "labels": "piano"})
 
     return {
         "openmic": openmic_root,

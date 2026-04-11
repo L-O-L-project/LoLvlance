@@ -34,9 +34,15 @@ class AudioFeatures:
     log_mel_spectrogram: np.ndarray
     rms: float
     spectral_centroid_hz: float
+    spectral_rolloff_hz: float
+    boom_ratio: float
     low_mid_ratio: float
+    boxy_ratio: float
     presence_ratio: float
     harsh_ratio: float
+    nasal_ratio: float
+    sibilant_ratio: float
+    air_ratio: float
 
 
 def load_audio_segment(
@@ -93,19 +99,22 @@ def extract_audio_features_from_waveform(
     log_mel = waveform_to_log_mel_spectrogram(normalized_waveform, active_config)
 
     rms = float(np.sqrt(np.mean(np.square(normalized_waveform)) + 1e-12))
-    spectral_centroid_hz, low_mid_ratio, presence_ratio, harsh_ratio = compute_spectral_statistics(
-        normalized_waveform,
-        active_config.sample_rate,
-    )
+    stats = compute_spectral_statistics(normalized_waveform, active_config.sample_rate)
 
     return AudioFeatures(
         waveform=normalized_waveform,
         log_mel_spectrogram=log_mel,
         rms=rms,
-        spectral_centroid_hz=spectral_centroid_hz,
-        low_mid_ratio=low_mid_ratio,
-        presence_ratio=presence_ratio,
-        harsh_ratio=harsh_ratio,
+        spectral_centroid_hz=stats["spectral_centroid_hz"],
+        spectral_rolloff_hz=stats["spectral_rolloff_hz"],
+        boom_ratio=stats["boom_ratio"],
+        low_mid_ratio=stats["low_mid_ratio"],
+        boxy_ratio=stats["boxy_ratio"],
+        presence_ratio=stats["presence_ratio"],
+        harsh_ratio=stats["harsh_ratio"],
+        nasal_ratio=stats["nasal_ratio"],
+        sibilant_ratio=stats["sibilant_ratio"],
+        air_ratio=stats["air_ratio"],
     )
 
 
@@ -114,18 +123,11 @@ def waveform_to_log_mel_spectrogram(
     config: PreprocessingConfig | None = None,
 ) -> np.ndarray:
     active_config = config or PreprocessingConfig()
-    frame_size = max(
-        1,
-        int(round((active_config.window_ms / 1000.0) * active_config.sample_rate)),
-    )
-    hop_size = max(
-        1,
-        int(round((active_config.hop_ms / 1000.0) * active_config.sample_rate)),
-    )
+    frame_size = max(1, int(round((active_config.window_ms / 1000.0) * active_config.sample_rate)))
+    hop_size = max(1, int(round((active_config.hop_ms / 1000.0) * active_config.sample_rate)))
     fft_size = max(next_power_of_two(frame_size), active_config.fft_size)
     spectrum_bin_count = fft_size // 2 + 1
     frame_count = max(1, math.floor((len(waveform) - frame_size) / hop_size) + 1)
-
     hann_window = get_hann_window(frame_size)
     mel_filter_bank = get_mel_filter_bank(
         sample_rate=active_config.sample_rate,
@@ -152,21 +154,42 @@ def waveform_to_log_mel_spectrogram(
     return log_mel
 
 
-def compute_spectral_statistics(waveform: np.ndarray, sample_rate: int) -> tuple[float, float, float, float]:
+def compute_spectral_statistics(waveform: np.ndarray, sample_rate: int) -> dict[str, float]:
     if waveform.size == 0:
-        return 0.0, 0.0, 0.0, 0.0
+        return {
+            "spectral_centroid_hz": 0.0,
+            "spectral_rolloff_hz": 0.0,
+            "boom_ratio": 0.0,
+            "low_mid_ratio": 0.0,
+            "boxy_ratio": 0.0,
+            "presence_ratio": 0.0,
+            "harsh_ratio": 0.0,
+            "nasal_ratio": 0.0,
+            "sibilant_ratio": 0.0,
+            "air_ratio": 0.0,
+        }
 
     window = np.hanning(max(2, waveform.size)).astype(np.float32)
-    padded_window = window[: waveform.size]
-    spectrum = np.abs(np.fft.rfft(waveform * padded_window)) ** 2
+    spectrum = np.abs(np.fft.rfft(waveform * window[: waveform.size])) ** 2
     freqs = np.fft.rfftfreq(waveform.size, d=1.0 / sample_rate)
     total_energy = float(np.sum(spectrum) + 1e-12)
-
     centroid = float(np.sum(freqs * spectrum) / total_energy)
-    low_mid_ratio = band_energy_ratio(freqs, spectrum, 200.0, 500.0, total_energy)
-    presence_ratio = band_energy_ratio(freqs, spectrum, 1_000.0, 4_000.0, total_energy)
-    harsh_ratio = band_energy_ratio(freqs, spectrum, 4_000.0, 8_000.0, total_energy)
-    return centroid, low_mid_ratio, presence_ratio, harsh_ratio
+    cumulative = np.cumsum(spectrum)
+    rolloff_index = int(np.searchsorted(cumulative, total_energy * 0.85, side="left"))
+    rolloff_index = min(rolloff_index, freqs.shape[0] - 1)
+
+    return {
+        "spectral_centroid_hz": centroid,
+        "spectral_rolloff_hz": float(freqs[rolloff_index]),
+        "boom_ratio": band_energy_ratio(freqs, spectrum, 60.0, 180.0, total_energy),
+        "low_mid_ratio": band_energy_ratio(freqs, spectrum, 200.0, 500.0, total_energy),
+        "boxy_ratio": band_energy_ratio(freqs, spectrum, 350.0, 900.0, total_energy),
+        "presence_ratio": band_energy_ratio(freqs, spectrum, 1_000.0, 4_000.0, total_energy),
+        "harsh_ratio": band_energy_ratio(freqs, spectrum, 4_000.0, 8_000.0, total_energy),
+        "nasal_ratio": band_energy_ratio(freqs, spectrum, 700.0, 1_600.0, total_energy),
+        "sibilant_ratio": band_energy_ratio(freqs, spectrum, 5_000.0, 8_000.0, total_energy),
+        "air_ratio": band_energy_ratio(freqs, spectrum, 6_000.0, 8_000.0, total_energy),
+    }
 
 
 def band_energy_ratio(
@@ -235,7 +258,6 @@ def get_mel_filter_bank(sample_rate: int, fft_size: int, mel_bin_count: int) -> 
     hz_points = mel_to_hz(mel_points)
     fft_bins = np.floor(((fft_size + 1) * hz_points) / sample_rate).astype(np.int32)
     fft_bins = np.clip(fft_bins, 0, spectrum_bin_count - 1)
-
     filter_bank = np.zeros((mel_bin_count, spectrum_bin_count), dtype=np.float32)
 
     for mel_index in range(mel_bin_count):

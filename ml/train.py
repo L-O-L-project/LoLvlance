@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import random
 from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 try:
@@ -17,6 +19,14 @@ try:
         load_manifest,
         summarize_manifest,
     )
+    from .label_schema import (
+        DEFAULT_ISSUE_THRESHOLDS,
+        DEFAULT_SOURCE_THRESHOLDS,
+        ISSUE_LABELS,
+        SCHEMA_VERSION,
+        SOURCE_LABELS,
+    )
+    from .metrics import evaluate_multilabel_head, tune_thresholds
     from .model import LightweightAudioAnalysisNet, ModelConfig
     from .preprocessing import PreprocessingConfig
 except ImportError:
@@ -27,13 +37,21 @@ except ImportError:
         load_manifest,
         summarize_manifest,
     )
+    from label_schema import (
+        DEFAULT_ISSUE_THRESHOLDS,
+        DEFAULT_SOURCE_THRESHOLDS,
+        ISSUE_LABELS,
+        SCHEMA_VERSION,
+        SOURCE_LABELS,
+    )
+    from metrics import evaluate_multilabel_head, tune_thresholds
     from model import LightweightAudioAnalysisNet, ModelConfig
     from preprocessing import PreprocessingConfig
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a lightweight LoLvlance multi-label sound issue classifier."
+        description="Train the hierarchical LoLvlance audio diagnosis model."
     )
     parser.add_argument("--openmic-root", type=Path, default=None, help="OpenMIC-2018 dataset root.")
     parser.add_argument("--slakh-root", type=Path, default=None, help="Slakh2100 dataset root.")
@@ -43,32 +61,34 @@ def parse_args() -> argparse.Namespace:
         "--manifest-path",
         type=Path,
         default=Path("ml/artifacts/public_dataset_manifest.jsonl"),
-        help="Where to write/read the derived LoLvlance manifest.",
+        help="Where to store the derived hierarchical label manifest.",
     )
     parser.add_argument(
         "--rebuild-manifest",
         action="store_true",
-        help="Re-scan the public datasets even if a manifest already exists.",
+        help="Re-scan public datasets even if the manifest already exists.",
     )
-    parser.add_argument("--clips-per-file", type=int, default=2, help="How many clips to sample per source file.")
+    parser.add_argument("--clips-per-file", type=int, default=2, help="Number of clips to sample per file.")
     parser.add_argument(
         "--max-files-per-dataset",
         type=int,
         default=None,
-        help="Optional cap to keep the first run fast while bootstrapping.",
+        help="Optional cap to keep early experiments fast.",
     )
-    parser.add_argument("--epochs", type=int, default=5, help="Training epochs.")
+    parser.add_argument("--epochs", type=int, default=6, help="Training epochs.")
     parser.add_argument("--batch-size", type=int, default=16, help="Training batch size.")
-    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Adam learning rate.")
+    parser.add_argument("--learning-rate", type=float, default=1e-3, help="AdamW learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay.")
-    parser.add_argument("--dropout", type=float, default=0.15, help="Classifier dropout.")
+    parser.add_argument("--dropout", type=float, default=0.15, help="Head dropout.")
+    parser.add_argument("--issue-loss-weight", type=float, default=1.0, help="Weight for issue-head loss.")
+    parser.add_argument("--source-loss-weight", type=float, default=0.6, help="Weight for source-head loss.")
     parser.add_argument("--num-workers", type=int, default=0, help="Dataloader workers.")
     parser.add_argument("--seed", type=int, default=7, help="Random seed.")
     parser.add_argument(
         "--checkpoint-dir",
         type=Path,
         default=Path("ml/checkpoints"),
-        help="Directory for last/best checkpoints and training metrics.",
+        help="Directory for checkpoints and metric artifacts.",
     )
     parser.add_argument(
         "--device",
@@ -79,13 +99,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--export-onnx",
         action="store_true",
-        help="Export the best checkpoint to ONNX when training finishes.",
+        help="Export the best checkpoint to ONNX after training.",
     )
     parser.add_argument(
         "--onnx-output",
         type=Path,
         default=Path("ml/checkpoints/lightweight_audio_model.onnx"),
-        help="Output path used with --export-onnx.",
+        help="ONNX output path used with --export-onnx.",
     )
     return parser.parse_args()
 
@@ -94,110 +114,172 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
     seed_everything(args.seed)
     device = resolve_device(args.device)
     preprocessing_config = PreprocessingConfig()
-
     manifest_path = prepare_manifest(args, preprocessing_config)
-    manifest_entries = load_manifest(manifest_path)
-    manifest_summary = summarize_manifest(manifest_entries)
+    manifest_summary = summarize_manifest(load_manifest(manifest_path))
 
-    train_dataset = LoLvlanceAudioDataset(
-        manifest_path=manifest_path,
-        split="train",
-        preprocessing_config=preprocessing_config,
-    )
-    val_dataset = LoLvlanceAudioDataset(
-        manifest_path=manifest_path,
-        split="val",
-        preprocessing_config=preprocessing_config,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-    )
+    train_dataset = LoLvlanceAudioDataset(manifest_path=manifest_path, split="train", preprocessing_config=preprocessing_config)
+    val_dataset = LoLvlanceAudioDataset(manifest_path=manifest_path, split="val", preprocessing_config=preprocessing_config)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     model_config = ModelConfig(dropout=args.dropout)
     model = LightweightAudioAnalysisNet(model_config).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
-    )
-    pos_weight = compute_pos_weight(train_dataset).to(device)
-    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    issue_pos_weight = compute_pos_weight(train_dataset.entries, "issue_targets", ISSUE_LABELS).to(device)
+    source_pos_weight = compute_pos_weight(train_dataset.entries, "source_targets", SOURCE_LABELS).to(device)
+    has_source_supervision = float(source_pos_weight.numel()) > 0 and float(
+        sum(sum(entry["source_targets"]["mask"]) for entry in train_dataset.entries)
+    ) > 0
 
+    default_issue_thresholds = dict(DEFAULT_ISSUE_THRESHOLDS)
+    default_source_thresholds = dict(DEFAULT_SOURCE_THRESHOLDS)
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    history: list[dict[str, float]] = []
-    best_metric = float("-inf")
+
+    history: list[dict[str, object]] = []
+    best_score = float("-inf")
+    best_epoch = 0
+    best_state_dict = copy.deepcopy(model.state_dict())
     best_checkpoint_path = args.checkpoint_dir / "best_sound_issue_model.pt"
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = run_epoch(
+        train_epoch = run_epoch(
             model=model,
             data_loader=train_loader,
-            criterion=criterion,
             device=device,
             optimizer=optimizer,
+            issue_pos_weight=issue_pos_weight,
+            source_pos_weight=source_pos_weight,
+            issue_loss_weight=args.issue_loss_weight,
+            source_loss_weight=args.source_loss_weight if has_source_supervision else 0.0,
+            collect_outputs=False,
         )
-        val_metrics = run_epoch(
+        val_epoch = run_epoch(
             model=model,
             data_loader=val_loader,
-            criterion=criterion,
             device=device,
             optimizer=None,
+            issue_pos_weight=issue_pos_weight,
+            source_pos_weight=source_pos_weight,
+            issue_loss_weight=args.issue_loss_weight,
+            source_loss_weight=args.source_loss_weight if has_source_supervision else 0.0,
+            collect_outputs=True,
         )
 
+        val_metrics = build_validation_metrics(
+            epoch_outputs=val_epoch["outputs"],
+            issue_thresholds=default_issue_thresholds,
+            source_thresholds=default_source_thresholds,
+        )
+        composite_score = float(val_metrics["issue_head"]["macro_f1"]) + (
+            float(val_metrics["source_head"]["macro_f1"]) * 0.35 if has_source_supervision else 0.0
+        )
         epoch_record = {
-            "epoch": float(epoch),
-            "train_loss": train_metrics["loss"],
-            "train_accuracy": train_metrics["accuracy"],
-            "train_micro_f1": train_metrics["micro_f1"],
-            "val_loss": val_metrics["loss"],
-            "val_accuracy": val_metrics["accuracy"],
-            "val_micro_f1": val_metrics["micro_f1"],
+            "epoch": epoch,
+            "train": {
+                "total_loss": round(float(train_epoch["total_loss"]), 4),
+                "issue_loss": round(float(train_epoch["issue_loss"]), 4),
+                "source_loss": round(float(train_epoch["source_loss"]), 4),
+            },
+            "val": {
+                "total_loss": round(float(val_epoch["total_loss"]), 4),
+                "issue_loss": round(float(val_epoch["issue_loss"]), 4),
+                "source_loss": round(float(val_epoch["source_loss"]), 4),
+                "metrics": val_metrics,
+            },
+            "selection_score": round(composite_score, 4),
         }
         history.append(epoch_record)
 
-        last_checkpoint_path = args.checkpoint_dir / "last_sound_issue_model.pt"
         save_checkpoint(
-            checkpoint_path=last_checkpoint_path,
-            model=model,
-            optimizer=optimizer,
+            checkpoint_path=args.checkpoint_dir / "last_sound_issue_model.pt",
+            model_state_dict=model.state_dict(),
+            optimizer_state_dict=optimizer.state_dict(),
             epoch=epoch,
             model_config=model_config,
-            metrics=epoch_record,
             manifest_summary=manifest_summary,
+            metrics=epoch_record,
+            thresholds={
+                "issue_thresholds": default_issue_thresholds,
+                "source_thresholds": default_source_thresholds,
+            },
         )
 
-        if val_metrics["micro_f1"] >= best_metric:
-            best_metric = val_metrics["micro_f1"]
-            save_checkpoint(
-                checkpoint_path=best_checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                model_config=model_config,
-                metrics=epoch_record,
-                manifest_summary=manifest_summary,
-            )
+        if composite_score >= best_score:
+            best_score = composite_score
+            best_epoch = epoch
+            best_state_dict = copy.deepcopy(model.state_dict())
 
         print(
             f"epoch={epoch} "
-            f"train_loss={train_metrics['loss']:.4f} "
-            f"train_f1={train_metrics['micro_f1']:.4f} "
-            f"val_loss={val_metrics['loss']:.4f} "
-            f"val_f1={val_metrics['micro_f1']:.4f}"
+            f"train_loss={train_epoch['total_loss']:.4f} "
+            f"val_loss={val_epoch['total_loss']:.4f} "
+            f"issue_macro_f1={val_metrics['issue_head']['macro_f1']:.4f} "
+            f"source_macro_f1={val_metrics['source_head']['macro_f1']:.4f}"
         )
 
+    model.load_state_dict(best_state_dict)
+    best_val_epoch = run_epoch(
+        model=model,
+        data_loader=val_loader,
+        device=device,
+        optimizer=None,
+        issue_pos_weight=issue_pos_weight,
+        source_pos_weight=source_pos_weight,
+        issue_loss_weight=args.issue_loss_weight,
+        source_loss_weight=args.source_loss_weight if has_source_supervision else 0.0,
+        collect_outputs=True,
+    )
+    tuned_issue_thresholds = tune_thresholds(
+        probabilities=best_val_epoch["outputs"]["issue_probs"],
+        targets=best_val_epoch["outputs"]["issue_targets"],
+        masks=best_val_epoch["outputs"]["issue_mask"],
+        labels=ISSUE_LABELS,
+        defaults=default_issue_thresholds,
+    )
+    tuned_source_thresholds = tune_thresholds(
+        probabilities=best_val_epoch["outputs"]["source_probs"],
+        targets=best_val_epoch["outputs"]["source_targets"],
+        masks=best_val_epoch["outputs"]["source_mask"],
+        labels=SOURCE_LABELS,
+        defaults=default_source_thresholds,
+    )
+    tuned_metrics = build_validation_metrics(
+        epoch_outputs=best_val_epoch["outputs"],
+        issue_thresholds=tuned_issue_thresholds,
+        source_thresholds=tuned_source_thresholds,
+    )
+    threshold_path = args.checkpoint_dir / "label_thresholds.json"
+    threshold_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "issue_thresholds": tuned_issue_thresholds,
+        "source_thresholds": tuned_source_thresholds,
+        "best_epoch": best_epoch,
+    }
+    threshold_path.write_text(json.dumps(threshold_payload, indent=2), encoding="utf-8")
+
+    final_summary = {
+        "schema_version": SCHEMA_VERSION,
+        "manifest": manifest_summary,
+        "best_epoch": best_epoch,
+        "selection_score": round(best_score, 4),
+        "tuned_metrics": tuned_metrics,
+        "thresholds": threshold_payload,
+        "device": device.type,
+        "history": history,
+    }
     history_path = args.checkpoint_dir / "training_history.json"
-    history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    history_path.write_text(json.dumps(final_summary, indent=2), encoding="utf-8")
+
+    save_checkpoint(
+        checkpoint_path=best_checkpoint_path,
+        model_state_dict=best_state_dict,
+        optimizer_state_dict=optimizer.state_dict(),
+        epoch=best_epoch,
+        model_config=model_config,
+        manifest_summary=manifest_summary,
+        metrics=final_summary,
+        thresholds=threshold_payload,
+    )
 
     if args.export_onnx:
         try:
@@ -216,13 +298,7 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         )
         export_to_onnx(export_args)
 
-    summary = {
-        "manifest": manifest_summary,
-        "history": history,
-        "best_checkpoint": best_checkpoint_path.as_posix(),
-        "device": device.type,
-    }
-    return best_checkpoint_path, summary
+    return best_checkpoint_path, final_summary
 
 
 def prepare_manifest(args: argparse.Namespace, preprocessing_config: PreprocessingConfig) -> Path:
@@ -251,81 +327,171 @@ def prepare_manifest(args: argparse.Namespace, preprocessing_config: Preprocessi
 
 
 def run_epoch(
+    *,
     model: LightweightAudioAnalysisNet,
     data_loader: DataLoader,
-    criterion: torch.nn.Module,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
-) -> dict[str, float]:
+    issue_pos_weight: torch.Tensor,
+    source_pos_weight: torch.Tensor,
+    issue_loss_weight: float,
+    source_loss_weight: float,
+    collect_outputs: bool,
+) -> dict[str, object]:
     is_training = optimizer is not None
     model.train(is_training)
-
     total_loss = 0.0
-    total_examples = 0
-    total_accuracy = 0.0
-    true_positives = 0.0
-    false_positives = 0.0
-    false_negatives = 0.0
+    total_issue_loss = 0.0
+    total_source_loss = 0.0
+    total_batches = 0
+
+    collected_outputs = {
+        "issue_probs": [],
+        "issue_targets": [],
+        "issue_mask": [],
+        "source_probs": [],
+        "source_targets": [],
+        "source_mask": [],
+    }
 
     for batch in data_loader:
         inputs = batch["log_mel_spectrogram"].to(device)
-        labels = batch["labels"].to(device)
+        issue_targets = batch["issue_targets"].to(device)
+        issue_mask = batch["issue_target_mask"].to(device)
+        source_targets = batch["source_targets"].to(device)
+        source_mask = batch["source_target_mask"].to(device)
 
         if is_training:
             optimizer.zero_grad(set_to_none=True)
 
         with torch.set_grad_enabled(is_training):
             outputs = model(inputs)
-            logits = outputs["problem_logits"]
-            probabilities = outputs["problem_probs"]
-            loss = criterion(logits, labels)
+            issue_logits = outputs["issue_logits"]
+            source_logits = outputs["source_logits"]
+            issue_loss = masked_bce_with_logits(
+                logits=issue_logits,
+                targets=issue_targets,
+                mask=issue_mask,
+                pos_weight=issue_pos_weight,
+            )
+            source_loss = masked_bce_with_logits(
+                logits=source_logits,
+                targets=source_targets,
+                mask=source_mask,
+                pos_weight=source_pos_weight,
+            )
+            loss = issue_loss * issue_loss_weight + source_loss * source_loss_weight
 
             if is_training:
                 loss.backward()
                 optimizer.step()
 
-        predictions = (probabilities >= 0.5).float()
-        total_loss += float(loss.item()) * labels.size(0)
-        total_examples += labels.size(0)
-        total_accuracy += float((predictions == labels).float().mean(dim=1).sum().item())
-        true_positives += float((predictions * labels).sum().item())
-        false_positives += float((predictions * (1.0 - labels)).sum().item())
-        false_negatives += float(((1.0 - predictions) * labels).sum().item())
+        total_loss += float(loss.item())
+        total_issue_loss += float(issue_loss.item())
+        total_source_loss += float(source_loss.item())
+        total_batches += 1
 
-    precision = true_positives / max(1.0, true_positives + false_positives)
-    recall = true_positives / max(1.0, true_positives + false_negatives)
-    micro_f1 = 0.0 if precision + recall == 0 else 2.0 * precision * recall / (precision + recall)
+        if collect_outputs:
+            collected_outputs["issue_probs"].append(outputs["issue_probs"].detach().cpu().numpy())
+            collected_outputs["issue_targets"].append(issue_targets.detach().cpu().numpy())
+            collected_outputs["issue_mask"].append(issue_mask.detach().cpu().numpy())
+            collected_outputs["source_probs"].append(outputs["source_probs"].detach().cpu().numpy())
+            collected_outputs["source_targets"].append(source_targets.detach().cpu().numpy())
+            collected_outputs["source_mask"].append(source_mask.detach().cpu().numpy())
+
+    output_arrays = {
+        key: (
+            np.concatenate(value, axis=0)
+            if value
+            else np.zeros((0, len(ISSUE_LABELS) if "issue" in key else len(SOURCE_LABELS)), dtype=np.float32)
+        )
+        for key, value in collected_outputs.items()
+    }
 
     return {
-        "loss": total_loss / max(1, total_examples),
-        "accuracy": total_accuracy / max(1, total_examples),
-        "micro_f1": micro_f1,
+        "total_loss": total_loss / max(1, total_batches),
+        "issue_loss": total_issue_loss / max(1, total_batches),
+        "source_loss": total_source_loss / max(1, total_batches),
+        "outputs": output_arrays,
     }
 
 
-def compute_pos_weight(dataset: LoLvlanceAudioDataset) -> torch.Tensor:
-    labels = torch.tensor([entry["label_vector"] for entry in dataset.entries], dtype=torch.float32)
-    positive_counts = labels.sum(dim=0)
-    negative_counts = labels.size(0) - positive_counts
-    return negative_counts / positive_counts.clamp(min=1.0)
+def build_validation_metrics(
+    *,
+    epoch_outputs: dict[str, np.ndarray],
+    issue_thresholds: dict[str, float],
+    source_thresholds: dict[str, float],
+) -> dict[str, object]:
+    return {
+        "issue_head": evaluate_multilabel_head(
+            probabilities=epoch_outputs["issue_probs"],
+            targets=epoch_outputs["issue_targets"],
+            masks=epoch_outputs["issue_mask"],
+            labels=ISSUE_LABELS,
+            thresholds=issue_thresholds,
+        ),
+        "source_head": evaluate_multilabel_head(
+            probabilities=epoch_outputs["source_probs"],
+            targets=epoch_outputs["source_targets"],
+            masks=epoch_outputs["source_mask"],
+            labels=SOURCE_LABELS,
+            thresholds=source_thresholds,
+        ),
+    }
+
+
+def masked_bce_with_logits(
+    *,
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    mask: torch.Tensor,
+    pos_weight: torch.Tensor,
+) -> torch.Tensor:
+    if torch.count_nonzero(mask).item() == 0:
+        return logits.sum() * 0.0
+
+    loss = F.binary_cross_entropy_with_logits(
+        logits,
+        targets,
+        reduction="none",
+        pos_weight=pos_weight,
+    )
+    masked_loss = loss * mask
+    return masked_loss.sum() / mask.sum().clamp(min=1.0)
+
+
+def compute_pos_weight(entries: list[dict], target_key: str, labels: tuple[str, ...]) -> torch.Tensor:
+    values = torch.tensor([entry[target_key]["values"] for entry in entries], dtype=torch.float32)
+    masks = torch.tensor([entry[target_key]["mask"] for entry in entries], dtype=torch.float32)
+    positives = (values * masks).sum(dim=0)
+    negatives = masks.sum(dim=0) - positives
+    safe_weight = negatives / positives.clamp(min=1.0)
+    safe_weight = torch.where(masks.sum(dim=0) > 0, safe_weight, torch.ones_like(safe_weight))
+    if safe_weight.numel() != len(labels):
+        raise RuntimeError(f"Expected pos_weight length {len(labels)}, received {safe_weight.numel()}")
+    return safe_weight
 
 
 def save_checkpoint(
+    *,
     checkpoint_path: Path,
-    model: LightweightAudioAnalysisNet,
-    optimizer: torch.optim.Optimizer,
+    model_state_dict: dict[str, torch.Tensor],
+    optimizer_state_dict: dict,
     epoch: int,
     model_config: ModelConfig,
-    metrics: dict[str, float],
     manifest_summary: dict[str, object],
+    metrics: dict[str, object],
+    thresholds: dict[str, object],
 ) -> None:
     checkpoint = {
-        "state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "state_dict": model_state_dict,
+        "optimizer_state_dict": optimizer_state_dict,
         "epoch": epoch,
         "config": model_config.to_dict(),
-        "metrics": metrics,
         "manifest_summary": manifest_summary,
+        "metrics": metrics,
+        "thresholds": thresholds,
+        "schema_version": SCHEMA_VERSION,
     }
     torch.save(checkpoint, checkpoint_path)
 

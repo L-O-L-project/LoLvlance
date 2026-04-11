@@ -284,9 +284,13 @@ function enrichAnalysisResult(
   }
 ): AnalysisResult {
   const mergedResult = mergeDetectedSources(result, detectedSources);
+  const effectiveDetectedSources = detectedSources.length > 0
+    ? detectedSources
+    : (mergedResult.detectedSources ?? []);
 
   return {
     ...mergedResult,
+    detectedSources: effectiveDetectedSources,
     stemMetrics,
     stemService: {
       connected: stemConnected,
@@ -294,7 +298,7 @@ function enrichAnalysisResult(
       model: stemModel
     },
     sourceEqRecommendations: buildSourceAwareEqRecommendations({
-      detectedSources,
+      detectedSources: effectiveDetectedSources,
       issues: mergedResult.issues ?? [],
       stemMetrics
     })

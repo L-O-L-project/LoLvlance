@@ -1,5 +1,25 @@
 export type Instrument = 'vocal' | 'guitar' | 'bass' | 'drums' | 'keys' | 'overall';
 
+export type TrainableIssueLabel =
+  | 'muddy'
+  | 'harsh'
+  | 'buried'
+  | 'boomy'
+  | 'thin'
+  | 'boxy'
+  | 'nasal'
+  | 'sibilant'
+  | 'dull';
+
+export type DerivedDiagnosisType =
+  | 'vocal_buried'
+  | 'guitar_harsh'
+  | 'bass_muddy'
+  | 'drums_overpower'
+  | 'keys_masking';
+
+export type SourceLabel = Exclude<Instrument, 'overall'>;
+
 // LEVEL 1 - USER FACING PROBLEMS
 export type ProblemType = 
   // Primary
@@ -15,11 +35,7 @@ export type ProblemType =
   | 'sibilant'
   | 'dull'
   // Source-specific
-  | 'vocal_buried'
-  | 'guitar_harsh'
-  | 'bass_muddy'
-  | 'drums_overpower'
-  | 'keys_masking';
+  | DerivedDiagnosisType;
 
 // LEVEL 3 - DETAILED CAUSES
 export type DetailedCause = 
@@ -80,6 +96,7 @@ export interface DiagnosticProblem {
 }
 
 export type RuleBasedIssue = 'muddy' | 'harsh' | 'buried';
+export type LabelQuality = 'weak' | 'reviewed' | 'derived' | 'unavailable';
 
 export interface EQRecommendation {
   freq_range: string;
@@ -109,6 +126,23 @@ export interface StemServiceStatus {
   connected: boolean;
   provider: 'stem-service' | 'browser-fallback';
   model?: string;
+}
+
+export interface DerivedDiagnosisResult {
+  score: number;
+  reasons: string[];
+  explanation?: string;
+}
+
+export interface MlInferenceOutput {
+  schema_version: string;
+  issues: Partial<Record<TrainableIssueLabel, number>>;
+  sources: Partial<Record<SourceLabel, number>>;
+  derived_diagnoses: Partial<Record<DerivedDiagnosisType, DerivedDiagnosisResult>>;
+  metadata: {
+    thresholds_used: Record<string, number>;
+    label_quality: Partial<Record<TrainableIssueLabel | SourceLabel | DerivedDiagnosisType, LabelQuality>>;
+  };
 }
 
 export interface SourceEqRecommendation {
@@ -143,6 +177,7 @@ export interface AnalysisResult {
   stemMetrics?: StemMetric[];
   stemService?: StemServiceStatus;
   sourceEqRecommendations?: SourceEqRecommendation[];
+  ml_output?: MlInferenceOutput;
   engine?: AnalysisEngine;
   timestamp?: number;
 }

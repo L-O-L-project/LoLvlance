@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -9,12 +10,14 @@ import torch
 
 try:
     import onnxruntime as ort
-except ImportError:  # pragma: no cover - optional unless verify is enabled
+except ImportError:  # pragma: no cover
     ort = None
 
 try:
+    from .label_schema import get_label_schema
     from .model import LightweightAudioAnalysisNet, ModelConfig
 except ImportError:
+    from label_schema import get_label_schema
     from model import LightweightAudioAnalysisNet, ModelConfig
 
 
@@ -23,20 +26,16 @@ class OnnxExportWrapper(torch.nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)["problem_probs"]
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        outputs = self.model(x)
+        return outputs["issue_probs"], outputs["source_probs"]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export the LoLvlance lightweight issue classifier to ONNX."
+        description="Export the hierarchical LoLvlance model to ONNX."
     )
-    parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        required=True,
-        help="Path to a trained PyTorch checkpoint (.pt or .pth).",
-    )
+    parser.add_argument("--checkpoint", type=Path, required=True, help="Path to a trained checkpoint.")
     parser.add_argument(
         "--output",
         type=Path,
@@ -47,24 +46,14 @@ def parse_args() -> argparse.Namespace:
         "--time-steps",
         type=int,
         default=298,
-        help="Example time dimension for export. The ONNX graph keeps it dynamic.",
+        help="Example time dimension used during export. The ONNX graph keeps it dynamic.",
     )
-    parser.add_argument(
-        "--mel-bins",
-        type=int,
-        default=64,
-        help="Input mel-bin dimension. Must stay aligned with the frontend.",
-    )
-    parser.add_argument(
-        "--opset",
-        type=int,
-        default=18,
-        help="ONNX opset version.",
-    )
+    parser.add_argument("--mel-bins", type=int, default=64, help="Input mel-bin dimension.")
+    parser.add_argument("--opset", type=int, default=18, help="ONNX opset version.")
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="Run a post-export onnxruntime check and verify output shape is (batch, 3).",
+        help="Run a post-export onnxruntime verification.",
     )
     return parser.parse_args()
 
@@ -88,17 +77,30 @@ def export_to_onnx(args: argparse.Namespace) -> Path:
         opset_version=args.opset,
         dynamo=False,
         input_names=["log_mel_spectrogram"],
-        output_names=["problem_probs"],
+        output_names=["issue_probs", "source_probs"],
         dynamic_axes={
             "log_mel_spectrogram": {0: "batch_size", 1: "time_steps"},
-            "problem_probs": {0: "batch_size"},
+            "issue_probs": {0: "batch_size"},
+            "source_probs": {0: "batch_size"},
         },
     )
+
+    export_metadata(args.output, checkpoint)
 
     if args.verify:
         verify_export(args.output, export_model, example_input)
 
     return args.output
+
+
+def export_metadata(onnx_path: Path, checkpoint: Any) -> None:
+    threshold_payload = checkpoint.get("thresholds", {}) if isinstance(checkpoint, dict) else {}
+    schema = get_label_schema(
+        issue_thresholds=threshold_payload.get("issue_thresholds"),
+        source_thresholds=threshold_payload.get("source_thresholds"),
+    )
+    metadata_path = onnx_path.with_suffix(".metadata.json")
+    metadata_path.write_text(json.dumps(schema.to_dict(), indent=2), encoding="utf-8")
 
 
 def build_model(checkpoint: Any, mel_bins: int) -> LightweightAudioAnalysisNet:
@@ -123,16 +125,13 @@ def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
     if isinstance(checkpoint, dict):
         if "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
             return normalize_state_dict_keys(checkpoint["state_dict"])
-
         if "model_state_dict" in checkpoint and isinstance(checkpoint["model_state_dict"], dict):
             return normalize_state_dict_keys(checkpoint["model_state_dict"])
-
         if checkpoint and all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
             return normalize_state_dict_keys(checkpoint)
 
     raise ValueError(
-        "Unsupported checkpoint format. Expected a raw state_dict or a dict with "
-        "'state_dict' / 'model_state_dict'."
+        "Unsupported checkpoint format. Expected a raw state_dict or a dict with 'state_dict' / 'model_state_dict'."
     )
 
 
@@ -148,22 +147,19 @@ def verify_export(
     if ort is None:
         raise RuntimeError("onnxruntime is required for --verify but is not installed.")
 
-    session = ort.InferenceSession(
-        onnx_path.as_posix(),
-        providers=["CPUExecutionProvider"],
-    )
-    outputs = session.run(None, {"log_mel_spectrogram": example_input.numpy()})
+    session = ort.InferenceSession(onnx_path.as_posix(), providers=["CPUExecutionProvider"])
+    issue_probs, source_probs = session.run(None, {"log_mel_spectrogram": example_input.numpy()})
 
-    if len(outputs) != 1:
-        raise RuntimeError(f"Expected one ONNX output tensor, received {len(outputs)}.")
-
-    if outputs[0].shape != (1, 3):
-        raise RuntimeError(f"Expected ONNX output shape (1, 3), received {outputs[0].shape}.")
+    if issue_probs.shape[1] != 9:
+        raise RuntimeError(f"Expected issue_probs shape (batch, 9), received {issue_probs.shape}.")
+    if source_probs.shape[1] != 5:
+        raise RuntimeError(f"Expected source_probs shape (batch, 5), received {source_probs.shape}.")
 
     with torch.no_grad():
-        reference_output = export_model(example_input).cpu().numpy()
+        reference_issue_probs, reference_source_probs = export_model(example_input)
 
-    np.testing.assert_allclose(outputs[0], reference_output, rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(issue_probs, reference_issue_probs.cpu().numpy(), rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(source_probs, reference_source_probs.cpu().numpy(), rtol=1e-3, atol=1e-4)
 
 
 def main() -> None:

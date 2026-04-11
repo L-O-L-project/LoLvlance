@@ -1,83 +1,45 @@
 import type {
   AnalysisResult,
+  DetectedAudioSource,
   DiagnosticProblem,
   EQRecommendation,
   ExtractedAudioFeatures,
-  Instrument,
-  ProblemType
+  ProblemType,
+  RuleBasedIssue,
+  SourceLabel,
+  TrainableIssueLabel
 } from '../types';
+import { problemCauseMap } from '../data/diagnosticData';
+import { buildMlInferenceOutput } from './diagnosisPostProcessing';
+import {
+  ISSUE_DEFAULT_THRESHOLDS,
+  ISSUE_LABELS,
+  ISSUE_PROFILES,
+  ML_SCHEMA_VERSION,
+  PRIMARY_UI_ISSUES,
+  SOURCE_DEFAULT_THRESHOLDS,
+  SOURCE_LABELS
+} from './mlSchema';
 
 const MODEL_MEL_BIN_COUNT = 64;
 const MODEL_SILENCE_RMS_THRESHOLD = 0.012;
 const MODEL_MIN_HZ = 80;
 const MODEL_MAX_HZ = 8000;
-const INSTRUMENT_THRESHOLD = 0.45;
-const MULTI_LABEL_THRESHOLD = 0.5;
+const MIN_SOURCE_DISPLAY_SCORE = 0.25;
 
-const PROBLEM_LABELS = ['muddy', 'harsh', 'buried'] as const;
-const LEGACY_PROBLEM_LABELS = ['muddy', 'harsh', 'buried', 'normal'] as const;
-const INSTRUMENT_LABELS = ['vocal', 'guitar', 'bass', 'drums', 'keys'] as const;
-
-type MlProblemLabel = (typeof PROBLEM_LABELS)[number];
 type OrtModule = typeof import('onnxruntime-web');
 
-interface PredictedProblem {
-  type: MlProblemLabel;
-  confidence: number;
-  eqFrequencyHz: number;
-  eqGainDb: number;
-  eqRecommendation: EQRecommendation;
-}
-
-interface MlInferenceSnapshot {
-  problemProbabilities: number[];
-  instrumentProbabilities: number[];
-  instruments: Instrument[];
-  predictedProblems: PredictedProblem[];
-  usesLegacyHead: boolean;
-  legacyNormalProbability: number;
+interface ParsedModelOutputs {
+  issueScores: Record<TrainableIssueLabel, number>;
+  sourceScores: Record<SourceLabel, number>;
+  legacyEqFrequencyNormalized: number | null;
+  legacyEqGainDb: number | null;
+  usesLegacyOutputs: boolean;
 }
 
 let ortModulePromise: Promise<OrtModule> | null = null;
 let sessionPromise: Promise<import('onnxruntime-web').InferenceSession> | null = null;
 let hasLoggedModelReady = false;
-
-const modelProblemProfiles: Record<
-  MlProblemLabel,
-  {
-    details: DiagnosticProblem['details'];
-    fallbackReason: string;
-    fallbackEq: {
-      frequencyHz: number;
-      gainDb: number;
-    };
-  }
-> = {
-  muddy: {
-    details: ['low_mid_overlap', 'low_frequency_buildup'],
-    fallbackReason: 'model suggests reducing low-mid buildup',
-    fallbackEq: {
-      frequencyHz: 315,
-      gainDb: -3
-    }
-  },
-  harsh: {
-    details: ['high_frequency_spike', 'guitar_presence_peak'],
-    fallbackReason: 'model suggests taming aggressive upper-mid energy',
-    fallbackEq: {
-      frequencyHz: 5600,
-      gainDb: -2.5
-    }
-  },
-  buried: {
-    details: ['lack_of_presence', 'mid_range_masking'],
-    fallbackReason: 'model suggests restoring presence and clarity',
-    fallbackEq: {
-      frequencyHz: 3000,
-      gainDb: 2.5
-    }
-  }
-};
 
 export { MODEL_MEL_BIN_COUNT };
 
@@ -89,7 +51,8 @@ export async function warmUpMlInference() {
       hasLoggedModelReady = true;
       console.info('[audio-ml]', {
         status: 'ready',
-        model: getModelUrl()
+        model: getModelUrl(),
+        schema: ML_SCHEMA_VERSION
       });
     }
 
@@ -125,14 +88,21 @@ export async function analyzeWithMlInference(
     const [timeSteps, melBins] = features.logMelSpectrogramShape;
     const ort = await getOrtModule();
     const session = await getInferenceSession();
-    const feeds = {
+    const outputs = await session.run({
       log_mel_spectrogram: new ort.Tensor('float32', features.logMelSpectrogram, [1, timeSteps, melBins])
-    };
-    const outputs = await session.run(feeds);
-    const snapshot = parseInferenceOutputs(outputs);
+    });
+    const parsedOutputs = parseModelOutputs(outputs);
+    const mlOutput = buildMlInferenceOutput(parsedOutputs.issueScores, parsedOutputs.sourceScores);
+    const detectedSources = buildDetectedSources(parsedOutputs.sourceScores);
+    const result = buildAnalysisResult({
+      mlOutput,
+      detectedSources,
+      legacyEqFrequencyNormalized: parsedOutputs.legacyEqFrequencyNormalized,
+      legacyEqGainDb: parsedOutputs.legacyEqGainDb
+    });
 
-    logMlInference(snapshot);
-    return mlInferenceToAnalysisResult(snapshot);
+    logMlInference(result.ml_output, parsedOutputs.usesLegacyOutputs);
+    return result;
   } catch (error) {
     console.warn('[audio-ml] Inference failed. Falling back to the rule-based engine.', error);
     return null;
@@ -151,7 +121,6 @@ async function getInferenceSession() {
   if (!sessionPromise) {
     sessionPromise = (async () => {
       const ort = await getOrtModule();
-
       return ort.InferenceSession.create(getModelUrl(), {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all'
@@ -169,164 +138,178 @@ function getModelUrl() {
   return new URL(`${import.meta.env.BASE_URL}models/lightweight_audio_model.onnx`, window.location.origin).toString();
 }
 
-function parseInferenceOutputs(
+function parseModelOutputs(
   outputs: Awaited<ReturnType<import('onnxruntime-web').InferenceSession['run']>>
-): MlInferenceSnapshot {
+): ParsedModelOutputs {
   const outputMap = outputs as Record<string, unknown>;
-  const rawProblemProbabilities = readTensorData(outputMap.problem_probs, 'problem_probs');
-  const usesLegacyHead = rawProblemProbabilities.length >= LEGACY_PROBLEM_LABELS.length;
-  const legacyNormalProbability = usesLegacyHead ? rawProblemProbabilities[3] ?? 0 : 0;
-  const problemProbabilities = rawProblemProbabilities.slice(0, PROBLEM_LABELS.length);
-  const instrumentProbabilities = readOptionalTensorData(outputMap.instrument_probs, INSTRUMENT_LABELS.length);
-  const eqFrequencyNormalized = readOptionalScalar(outputMap.eq_freq);
-  const eqGainDb = readOptionalScalar(outputMap.eq_gain_db);
-  const instruments = selectInstruments(instrumentProbabilities);
-  const predictedProblems = usesLegacyHead
-    ? deriveLegacyProblems(problemProbabilities, legacyNormalProbability, eqFrequencyNormalized, eqGainDb)
-    : deriveMultiLabelProblems(problemProbabilities);
+  const issueTensor = outputMap.issue_probs ?? outputMap.problem_probs;
+  const sourceTensor = outputMap.source_probs ?? outputMap.instrument_probs;
+  const rawIssueScores = readTensorData(issueTensor, outputMap.issue_probs ? 'issue_probs' : 'problem_probs');
+  const rawSourceScores = readOptionalTensorData(sourceTensor, SOURCE_LABELS.length);
+  const usesLegacyOutputs = !('issue_probs' in outputMap);
+
+  const issueScores = Object.fromEntries(
+    ISSUE_LABELS.map((label, index) => [label, clamp(rawIssueScores[index] ?? 0, 0, 1)])
+  ) as Record<TrainableIssueLabel, number>;
+  const sourceScores = Object.fromEntries(
+    SOURCE_LABELS.map((label, index) => [label, clamp(rawSourceScores[index] ?? 0, 0, 1)])
+  ) as Record<SourceLabel, number>;
 
   return {
-    problemProbabilities,
-    instrumentProbabilities,
-    instruments,
-    predictedProblems,
-    usesLegacyHead,
-    legacyNormalProbability
+    issueScores,
+    sourceScores,
+    legacyEqFrequencyNormalized: readOptionalScalar(outputMap.eq_freq),
+    legacyEqGainDb: readOptionalScalar(outputMap.eq_gain_db),
+    usesLegacyOutputs
   };
 }
 
-function deriveLegacyProblems(
-  problemProbabilities: number[],
-  legacyNormalProbability: number,
-  eqFrequencyNormalized: number | null,
-  eqGainDb: number | null
-) {
-  const paddedProbabilities = [...problemProbabilities, legacyNormalProbability];
-  const topIndex = argMax(paddedProbabilities);
+function buildDetectedSources(sourceScores: Record<SourceLabel, number>) {
+  const detected = SOURCE_LABELS
+    .map((source) => ({
+      source,
+      confidence: sourceScores[source],
+      labels: [`model:${source}`]
+    }))
+    .filter((entry) => entry.confidence >= SOURCE_DEFAULT_THRESHOLDS[entry.source] || entry.confidence >= MIN_SOURCE_DISPLAY_SCORE)
+    .sort((left, right) => right.confidence - left.confidence)
+    .map((entry) => ({
+      source: entry.source,
+      confidence: Number(entry.confidence.toFixed(2)),
+      labels: entry.labels
+    })) as DetectedAudioSource[];
 
-  if (topIndex >= PROBLEM_LABELS.length) {
+  if (detected.length > 0) {
+    return detected;
+  }
+
+  const strongestSource = SOURCE_LABELS
+    .map((source) => ({ source, score: sourceScores[source] }))
+    .sort((left, right) => right.score - left.score)[0];
+
+  if (!strongestSource || strongestSource.score <= 0) {
     return [];
   }
 
-  const problemType = PROBLEM_LABELS[topIndex];
-  const profile = modelProblemProfiles[problemType];
-  const frequencyHz = eqFrequencyNormalized === null
-    ? profile.fallbackEq.frequencyHz
-    : normalizedToFrequency(eqFrequencyNormalized);
-  const gainDb = eqGainDb === null ? profile.fallbackEq.gainDb : eqGainDb;
-
-  return [
-    buildPredictedProblem(problemType, problemProbabilities[topIndex] ?? 0, frequencyHz, gainDb)
-  ];
+  return [{
+    source: strongestSource.source,
+    confidence: Number(strongestSource.score.toFixed(2)),
+    labels: [`model:${strongestSource.source}`]
+  }];
 }
 
-function deriveMultiLabelProblems(problemProbabilities: number[]) {
-  return PROBLEM_LABELS
-    .map((problemType, index) => ({
-      problemType,
-      confidence: problemProbabilities[index] ?? 0
-    }))
-    .filter((entry) => entry.confidence >= MULTI_LABEL_THRESHOLD)
-    .sort((left, right) => right.confidence - left.confidence)
-    .map((entry) => {
-      const profile = modelProblemProfiles[entry.problemType];
-
-      return buildPredictedProblem(
-        entry.problemType,
-        entry.confidence,
-        profile.fallbackEq.frequencyHz,
-        profile.fallbackEq.gainDb
-      );
-    });
-}
-
-function buildPredictedProblem(
-  problemType: MlProblemLabel,
-  confidence: number,
-  frequencyHz: number,
-  gainDb: number
-): PredictedProblem {
-  return {
-    type: problemType,
-    confidence,
-    eqFrequencyHz: frequencyHz,
-    eqGainDb: gainDb,
-    eqRecommendation: {
-      freq_range: formatEqRange(frequencyHz),
-      gain: formatGain(gainDb),
-      reason: buildRecommendationReason(problemType, gainDb)
-    }
-  };
-}
-
-function mlInferenceToAnalysisResult(snapshot: MlInferenceSnapshot): AnalysisResult {
-  if (snapshot.predictedProblems.length === 0) {
-    return {
-      problems: [],
-      issues: [],
-      eq_recommendations: [],
-      engine: 'ml',
-      timestamp: Date.now()
-    };
-  }
-
-  const sources = snapshot.instruments.length > 0 ? snapshot.instruments : ['overall'];
-  const problems = snapshot.predictedProblems.map((prediction) => {
-    const profile = modelProblemProfiles[prediction.type];
-
-    return {
-      type: prediction.type as ProblemType,
-      confidence: Number(prediction.confidence.toFixed(2)),
-      sources,
-      details: profile.details,
-      actions: [
-        `${prediction.eqRecommendation.freq_range} ${prediction.eqRecommendation.gain}`,
-        prediction.eqRecommendation.reason
-      ]
-    };
-  });
+function buildAnalysisResult({
+  mlOutput,
+  detectedSources,
+  legacyEqFrequencyNormalized,
+  legacyEqGainDb
+}: {
+  mlOutput: ReturnType<typeof buildMlInferenceOutput>;
+  detectedSources: DetectedAudioSource[];
+  legacyEqFrequencyNormalized: number | null;
+  legacyEqGainDb: number | null;
+}): AnalysisResult {
+  const issueProblems = ISSUE_LABELS
+    .filter((label) => (mlOutput.issues[label] ?? 0) >= ISSUE_DEFAULT_THRESHOLDS[label])
+    .sort((left, right) => (mlOutput.issues[right] ?? 0) - (mlOutput.issues[left] ?? 0))
+    .map((label, index) => buildIssueProblem({
+      label,
+      score: mlOutput.issues[label] ?? 0,
+      detectedSources,
+      useLegacyEq: index === 0,
+      legacyEqFrequencyNormalized,
+      legacyEqGainDb
+    }));
+  const derivedProblems = Object.entries(mlOutput.derived_diagnoses)
+    .map(([label, diagnosis]) => buildDerivedProblem(label as ProblemType, diagnosis!))
+    .filter((problem): problem is DiagnosticProblem => problem !== null);
+  const eqRecommendations = issueProblems.map((problem) => problem.actions[0] ? buildRecommendationFromProblem(problem) : null)
+    .filter((recommendation): recommendation is EQRecommendation => recommendation !== null);
+  const primaryIssues = issueProblems
+    .map((problem) => problem.type)
+    .filter((type): type is RuleBasedIssue => PRIMARY_UI_ISSUES.includes(type as RuleBasedIssue));
 
   return {
-    problems,
-    issues: problems.map((problem) => problem.type as ProblemType) as AnalysisResult['issues'],
-    eq_recommendations: snapshot.predictedProblems.map((problem) => problem.eqRecommendation),
+    problems: [...issueProblems, ...derivedProblems],
+    issues: primaryIssues,
+    eq_recommendations: eqRecommendations,
+    detectedSources,
+    ml_output: mlOutput,
     engine: 'ml',
     timestamp: Date.now()
   };
 }
 
-function buildRecommendationReason(problemType: MlProblemLabel, gainDb: number) {
-  const profile = modelProblemProfiles[problemType];
-  const roundedGain = Math.abs(gainDb);
+function buildIssueProblem({
+  label,
+  score,
+  detectedSources,
+  useLegacyEq,
+  legacyEqFrequencyNormalized,
+  legacyEqGainDb
+}: {
+  label: TrainableIssueLabel;
+  score: number;
+  detectedSources: DetectedAudioSource[];
+  useLegacyEq: boolean;
+  legacyEqFrequencyNormalized: number | null;
+  legacyEqGainDb: number | null;
+}): DiagnosticProblem {
+  const profile = ISSUE_PROFILES[label];
+  const frequencyHz = useLegacyEq && legacyEqFrequencyNormalized !== null
+    ? normalizedToFrequency(legacyEqFrequencyNormalized)
+    : profile.fallbackEq.frequencyHz;
+  const gainDb = useLegacyEq && legacyEqGainDb !== null
+    ? legacyEqGainDb
+    : profile.fallbackEq.gainDb;
+  const recommendation = formatRecommendation(frequencyHz, gainDb, profile.fallbackEq.reason);
+  const sources = detectedSources.length > 0 ? detectedSources.map((entry) => entry.source) : ['overall'];
 
-  if (roundedGain < 0.5) {
-    return `${profile.fallbackReason} with a subtle adjustment`;
-  }
-
-  return profile.fallbackReason;
+  return {
+    type: label,
+    confidence: Number(score.toFixed(2)),
+    sources,
+    details: profile.details,
+    actions: [`${recommendation.freq_range} ${recommendation.gain}`, recommendation.reason]
+  };
 }
 
-function selectInstruments(instrumentProbabilities: number[]) {
-  const predicted = INSTRUMENT_LABELS
-    .map((label, index) => ({
-      label,
-      probability: instrumentProbabilities[index] ?? 0
-    }))
-    .filter((entry) => entry.probability >= INSTRUMENT_THRESHOLD)
-    .map((entry) => entry.label as Instrument);
-
-  if (predicted.length > 0) {
-    return predicted;
+function buildDerivedProblem(label: ProblemType, diagnosis: NonNullable<ReturnType<typeof buildMlInferenceOutput>['derived_diagnoses'][keyof ReturnType<typeof buildMlInferenceOutput>['derived_diagnoses']]>) {
+  if (!diagnosis) {
+    return null;
   }
 
-  const strongestIndex = argMax(instrumentProbabilities);
-  const strongestProbability = instrumentProbabilities[strongestIndex] ?? 0;
+  const source = label.split('_')[0] as SourceLabel;
 
-  if (strongestProbability > 0) {
-    return [INSTRUMENT_LABELS[strongestIndex] as Instrument];
+  return {
+    type: label,
+    confidence: Number(diagnosis.score.toFixed(2)),
+    sources: [source],
+    details: problemCauseMap[label] ?? [],
+    actions: diagnosis.explanation ? [diagnosis.explanation] : diagnosis.reasons
+  };
+}
+
+function buildRecommendationFromProblem(problem: DiagnosticProblem): EQRecommendation | null {
+  const action = problem.actions[0];
+  if (!action) {
+    return null;
   }
 
-  return [];
+  const [freq_range, gain] = action.split(' ');
+  return {
+    freq_range,
+    gain,
+    reason: problem.actions[1] ?? 'model-driven recommendation'
+  };
+}
+
+function formatRecommendation(centerFrequencyHz: number, gainDb: number, reason: string): EQRecommendation {
+  return {
+    freq_range: formatEqRange(centerFrequencyHz),
+    gain: formatGain(gainDb),
+    reason
+  };
 }
 
 function readTensorData(value: unknown, outputName: string) {
@@ -353,8 +336,8 @@ function readOptionalScalar(value: unknown) {
   }
 
   const data = (value as { data: ArrayLike<number> }).data;
-  const firstValue = Array.from(data, (entry) => Number(entry))[0];
-  return Number.isFinite(firstValue) ? firstValue : null;
+  const scalar = Array.from(data, (entry) => Number(entry))[0];
+  return Number.isFinite(scalar) ? scalar : null;
 }
 
 function normalizedToFrequency(value: number) {
@@ -385,45 +368,16 @@ function formatGain(gainDb: number) {
   return `${rounded > 0 ? '+' : ''}${rounded.toFixed(Math.abs(rounded % 1) < 0.05 ? 0 : 1)}dB`;
 }
 
-function argMax(values: number[]) {
-  let bestIndex = 0;
-  let bestValue = Number.NEGATIVE_INFINITY;
-
-  for (let index = 0; index < values.length; index += 1) {
-    if (values[index] > bestValue) {
-      bestValue = values[index];
-      bestIndex = index;
-    }
-  }
-
-  return bestIndex;
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function logMlInference(snapshot: MlInferenceSnapshot) {
+function logMlInference(output: AnalysisResult['ml_output'], usesLegacyOutputs: boolean) {
   console.info('[audio-ml]', {
-    problemProbabilities: Object.fromEntries(
-      PROBLEM_LABELS.map((label, index) => [
-        label,
-        Number((snapshot.problemProbabilities[index] ?? 0).toFixed(4))
-      ])
-    ),
-    predictedProblems: snapshot.predictedProblems.map((problem) => ({
-      label: problem.type,
-      confidence: Number(problem.confidence.toFixed(4)),
-      eqFrequencyHz: Math.round(problem.eqFrequencyHz),
-      eqGainDb: Number(problem.eqGainDb.toFixed(3))
-    })),
-    instruments: Object.fromEntries(
-      INSTRUMENT_LABELS.map((label, index) => [
-        label,
-        Number((snapshot.instrumentProbabilities[index] ?? 0).toFixed(4))
-      ])
-    ),
-    legacyHead: snapshot.usesLegacyHead,
-    legacyNormalProbability: Number(snapshot.legacyNormalProbability.toFixed(4))
+    schema_version: output?.schema_version ?? ML_SCHEMA_VERSION,
+    usesLegacyOutputs,
+    issues: output?.issues,
+    sources: output?.sources,
+    derived_diagnoses: output?.derived_diagnoses
   });
 }

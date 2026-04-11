@@ -6,7 +6,10 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-PROBLEM_LABELS = ("muddy", "harsh", "buried")
+try:
+    from .label_schema import ISSUE_LABELS, SOURCE_LABELS
+except ImportError:
+    from label_schema import ISSUE_LABELS, SOURCE_LABELS
 
 
 @dataclass
@@ -15,19 +18,20 @@ class ModelConfig:
     conv_channels: tuple[int, ...] = field(default_factory=lambda: (24, 48, 72, 96))
     hidden_dim: int = 96
     dropout: float = 0.15
+    enable_cause_head: bool = False
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any] | None) -> "ModelConfig":
         if not payload:
             return cls()
 
-        payload = dict(payload)
-        conv_channels = payload.get("conv_channels")
+        normalized = dict(payload)
+        conv_channels = normalized.get("conv_channels")
 
         if isinstance(conv_channels, list):
-            payload["conv_channels"] = tuple(int(value) for value in conv_channels)
+            normalized["conv_channels"] = tuple(int(value) for value in conv_channels)
 
-        return cls(**payload)
+        return cls(**normalized)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -50,16 +54,31 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 
+class ClassificationHead(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, dropout: float) -> None:
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.network(x)
+
+
 class LightweightAudioAnalysisNet(nn.Module):
     """
-    Lightweight CNN for LoLvlance issue detection.
+    Lightweight hierarchical audio diagnosis model.
 
     Input:
         x: [batch, time, mel_bins] or [time, mel_bins]
 
     Outputs:
-        - problem_logits: [batch, 3]
-        - problem_probs: [batch, 3] with sigmoid activation
+        - issue_logits / issue_probs: [batch, 9]
+        - source_logits / source_probs: [batch, 5]
+        - embedding: [batch, hidden]
     """
 
     def __init__(self, config: ModelConfig | None = None) -> None:
@@ -67,33 +86,64 @@ class LightweightAudioAnalysisNet(nn.Module):
         self.config = config or ModelConfig()
 
         channels = (1, *self.config.conv_channels)
-        encoder_layers = [
-            ConvBlock(channels[index], channels[index + 1]) for index in range(len(channels) - 1)
-        ]
-        self.encoder = nn.Sequential(*encoder_layers)
+        self.encoder = nn.Sequential(
+            *[ConvBlock(channels[index], channels[index + 1]) for index in range(len(channels) - 1)]
+        )
 
         embedding_dim = self.config.conv_channels[-1] * 2
-        self.classifier = nn.Sequential(
-            nn.Linear(embedding_dim, self.config.hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(self.config.dropout),
-            nn.Linear(self.config.hidden_dim, len(PROBLEM_LABELS)),
+        self.issue_head = ClassificationHead(
+            input_dim=embedding_dim,
+            hidden_dim=self.config.hidden_dim,
+            output_dim=len(ISSUE_LABELS),
+            dropout=self.config.dropout,
+        )
+        self.source_head = ClassificationHead(
+            input_dim=embedding_dim,
+            hidden_dim=self.config.hidden_dim,
+            output_dim=len(SOURCE_LABELS),
+            dropout=self.config.dropout,
+        )
+        self.cause_head = (
+            ClassificationHead(
+                input_dim=embedding_dim,
+                hidden_dim=self.config.hidden_dim,
+                output_dim=0,
+                dropout=self.config.dropout,
+            )
+            if self.config.enable_cause_head
+            else None
         )
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         x = self._prepare_input(x)
         x = self.encoder(x)
 
-        avg_pool = x.mean(dim=(2, 3))
+        average_pool = x.mean(dim=(2, 3))
         max_pool = x.amax(dim=(2, 3))
-        embedding = torch.cat([avg_pool, max_pool], dim=-1)
-        problem_logits = self.classifier(embedding)
+        embedding = torch.cat([average_pool, max_pool], dim=-1)
 
-        return {
-            "problem_logits": problem_logits,
-            "problem_probs": torch.sigmoid(problem_logits),
+        issue_logits = self.issue_head(embedding)
+        source_logits = self.source_head(embedding)
+        issue_probs = torch.sigmoid(issue_logits)
+        source_probs = torch.sigmoid(source_logits)
+
+        outputs = {
+            "issue_logits": issue_logits,
+            "issue_probs": issue_probs,
+            "source_logits": source_logits,
+            "source_probs": source_probs,
+            # Backward-compatible aliases for older helper code.
+            "problem_logits": issue_logits,
+            "problem_probs": issue_probs,
             "embedding": embedding,
         }
+
+        if self.cause_head is not None:
+            cause_logits = self.cause_head(embedding)
+            outputs["cause_logits"] = cause_logits
+            outputs["cause_probs"] = torch.sigmoid(cause_logits)
+
+        return outputs
 
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 2:
@@ -112,8 +162,8 @@ class LightweightAudioAnalysisNet(nn.Module):
 
 if __name__ == "__main__":
     model = LightweightAudioAnalysisNet()
-    dummy_input = torch.randn(4, 298, 64)
-    output = model(dummy_input)
+    dummy_input = torch.randn(2, 298, 64)
+    outputs = model(dummy_input)
 
-    for key, value in output.items():
+    for key, value in outputs.items():
         print(f"{key}: {tuple(value.shape)}")
