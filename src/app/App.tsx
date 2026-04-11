@@ -21,6 +21,7 @@ export default function App() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [language, setLanguage] = useState<Language>('en');
   const analysisTimeoutRef = useRef<number | null>(null);
+  const analysisRunIdRef = useRef(0);
 
   const {
     analyserNode,
@@ -53,6 +54,7 @@ export default function App() {
   }, []);
 
   const handleAnalyze = async () => {
+    analysisRunIdRef.current += 1;
     clearAnalysisTimer();
 
     const isReady = await requestMicrophoneAccess();
@@ -64,16 +66,26 @@ export default function App() {
     setResult(null);
     setAppState('listening');
 
+    const activeRunId = analysisRunIdRef.current;
+
     analysisTimeoutRef.current = window.setTimeout(() => {
-      const nextResult = analyseCurrentBuffer();
-      setResult(nextResult);
-      setAppState('result');
-      analysisTimeoutRef.current = null;
-      stopCapture();
+      void (async () => {
+        const nextResult = await analyseCurrentBuffer();
+
+        if (activeRunId !== analysisRunIdRef.current) {
+          return;
+        }
+
+        setResult(nextResult);
+        setAppState('result');
+        analysisTimeoutRef.current = null;
+        stopCapture();
+      })();
     }, ANALYSIS_WINDOW_MS);
   };
 
   const handleReset = () => {
+    analysisRunIdRef.current += 1;
     clearAnalysisTimer();
     stopCapture();
     setAppState('idle');
@@ -93,6 +105,7 @@ export default function App() {
   };
 
   const handleStopMonitoring = () => {
+    analysisRunIdRef.current += 1;
     clearAnalysisTimer();
     stopMonitoring();
     setAppState('idle');

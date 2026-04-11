@@ -101,10 +101,13 @@ export interface RuleBasedAnalysis {
   detections: RuleDetection[];
 }
 
+export type AnalysisEngine = 'ml' | 'rule-based' | 'rule-based-fallback';
+
 export interface AnalysisResult {
   problems: DiagnosticProblem[];
   issues?: RuleBasedIssue[];
   eq_recommendations?: EQRecommendation[];
+  engine?: AnalysisEngine;
   timestamp?: number;
 }
 
