@@ -4,36 +4,32 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
 try:
-    from .lightweight_audio_model import LightweightAudioAnalysisNet, ModelConfig
+    import onnxruntime as ort
+except ImportError:  # pragma: no cover - optional unless verify is enabled
+    ort = None
+
+try:
+    from .model import LightweightAudioAnalysisNet, ModelConfig
 except ImportError:
-    from lightweight_audio_model import LightweightAudioAnalysisNet, ModelConfig
+    from model import LightweightAudioAnalysisNet, ModelConfig
 
 
 class OnnxExportWrapper(torch.nn.Module):
-    """
-    ONNX-friendly wrapper that exports tensor outputs instead of a Python dict.
-    """
-
     def __init__(self, model: LightweightAudioAnalysisNet) -> None:
         super().__init__()
         self.model = model
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        outputs = self.model(x)
-        return (
-            outputs["problem_probs"],
-            outputs["instrument_probs"],
-            outputs["eq_freq"],
-            outputs["eq_gain_db"],
-        )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)["problem_probs"]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export the lightweight audio analysis model to ONNX for onnxruntime-web."
+        description="Export the LoLvlance lightweight issue classifier to ONNX."
     )
     parser.add_argument(
         "--checkpoint",
@@ -50,74 +46,69 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--time-steps",
         type=int,
-        default=128,
-        help="Example input sequence length T used during export.",
-    )
-    parser.add_argument(
-        "--opset",
-        type=int,
-        default=18,
-        help="ONNX opset version. 18 is a safe default for recent torch exporters and onnxruntime-web.",
-    )
-    parser.add_argument(
-        "--disable-transformer",
-        action="store_true",
-        help="Instantiate the model without transformer layers.",
-    )
-    parser.add_argument(
-        "--encoder-dim",
-        type=int,
-        default=128,
-        help="Encoder width used when reconstructing the model config.",
-    )
-    parser.add_argument(
-        "--transformer-layers",
-        type=int,
-        default=2,
-        help="Transformer layer count used when reconstructing the model config.",
-    )
-    parser.add_argument(
-        "--transformer-heads",
-        type=int,
-        default=4,
-        help="Transformer attention head count.",
-    )
-    parser.add_argument(
-        "--transformer-ffn-dim",
-        type=int,
-        default=256,
-        help="Transformer feed-forward width.",
-    )
-    parser.add_argument(
-        "--dropout",
-        type=float,
-        default=0.1,
-        help="Dropout used when reconstructing the model config.",
+        default=298,
+        help="Example time dimension for export. The ONNX graph keeps it dynamic.",
     )
     parser.add_argument(
         "--mel-bins",
         type=int,
         default=64,
-        help="Input mel-bin dimension. Expected to stay at 64 for the current frontend.",
+        help="Input mel-bin dimension. Must stay aligned with the frontend.",
+    )
+    parser.add_argument(
+        "--opset",
+        type=int,
+        default=18,
+        help="ONNX opset version.",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run a post-export onnxruntime check and verify output shape is (batch, 3).",
     )
     return parser.parse_args()
 
 
-def build_model_from_args(args: argparse.Namespace) -> LightweightAudioAnalysisNet:
-    config = ModelConfig(
-        mel_bins=args.mel_bins,
-        encoder_dim=args.encoder_dim,
-        transformer_layers=args.transformer_layers,
-        transformer_heads=args.transformer_heads,
-        transformer_ffn_dim=args.transformer_ffn_dim,
-        dropout=args.dropout,
-        use_transformer=not args.disable_transformer,
+def export_to_onnx(args: argparse.Namespace) -> Path:
+    checkpoint = torch.load(args.checkpoint, map_location="cpu")
+    model = build_model(checkpoint=checkpoint, mel_bins=args.mel_bins)
+    load_checkpoint(model, checkpoint)
+    model.eval().cpu()
+
+    export_model = OnnxExportWrapper(model).eval().cpu()
+    example_input = torch.randn(1, args.time_steps, args.mel_bins, dtype=torch.float32)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    torch.onnx.export(
+        export_model,
+        example_input,
+        args.output.as_posix(),
+        export_params=True,
+        do_constant_folding=True,
+        opset_version=args.opset,
+        dynamo=False,
+        input_names=["log_mel_spectrogram"],
+        output_names=["problem_probs"],
+        dynamic_axes={
+            "log_mel_spectrogram": {0: "batch_size", 1: "time_steps"},
+            "problem_probs": {0: "batch_size"},
+        },
     )
+
+    if args.verify:
+        verify_export(args.output, export_model, example_input)
+
+    return args.output
+
+
+def build_model(checkpoint: Any, mel_bins: int) -> LightweightAudioAnalysisNet:
+    config_payload = checkpoint.get("config") if isinstance(checkpoint, dict) else None
+    config = ModelConfig.from_dict(config_payload)
+    config.mel_bins = mel_bins
     return LightweightAudioAnalysisNet(config)
 
 
-def load_checkpoint(model: torch.nn.Module, checkpoint_path: Path) -> None:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+def load_checkpoint(model: torch.nn.Module, checkpoint: Any) -> None:
     state_dict = extract_state_dict(checkpoint)
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
@@ -146,54 +137,33 @@ def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
 
 
 def normalize_state_dict_keys(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    normalized: dict[str, torch.Tensor] = {}
-
-    for key, value in state_dict.items():
-        normalized[key.removeprefix("module.")] = value
-
-    return normalized
+    return {key.removeprefix("module."): value for key, value in state_dict.items()}
 
 
-def export_to_onnx(args: argparse.Namespace) -> Path:
-    model = build_model_from_args(args)
-    load_checkpoint(model, args.checkpoint)
-    model.eval().cpu()
+def verify_export(
+    onnx_path: Path,
+    export_model: torch.nn.Module,
+    example_input: torch.Tensor,
+) -> None:
+    if ort is None:
+        raise RuntimeError("onnxruntime is required for --verify but is not installed.")
 
-    export_model = OnnxExportWrapper(model).eval().cpu()
-    example_input = torch.randn(1, args.time_steps, args.mel_bins, dtype=torch.float32)
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-
-    # Example input tensor for export and quick validation.
-    print(f"Example input tensor shape: {tuple(example_input.shape)}")
-
-    torch.onnx.export(
-        export_model,
-        example_input,
-        args.output.as_posix(),
-        export_params=True,
-        do_constant_folding=True,
-        opset_version=args.opset,
-        input_names=["log_mel_spectrogram"],
-        output_names=[
-            "problem_probs",
-            "instrument_probs",
-            "eq_freq",
-            "eq_gain_db",
-        ],
-        dynamic_axes={
-            "log_mel_spectrogram": {
-                0: "batch_size",
-                1: "time_steps",
-            },
-            "problem_probs": {0: "batch_size"},
-            "instrument_probs": {0: "batch_size"},
-            "eq_freq": {0: "batch_size"},
-            "eq_gain_db": {0: "batch_size"},
-        },
+    session = ort.InferenceSession(
+        onnx_path.as_posix(),
+        providers=["CPUExecutionProvider"],
     )
+    outputs = session.run(None, {"log_mel_spectrogram": example_input.numpy()})
 
-    return args.output
+    if len(outputs) != 1:
+        raise RuntimeError(f"Expected one ONNX output tensor, received {len(outputs)}.")
+
+    if outputs[0].shape != (1, 3):
+        raise RuntimeError(f"Expected ONNX output shape (1, 3), received {outputs[0].shape}.")
+
+    with torch.no_grad():
+        reference_output = export_model(example_input).cpu().numpy()
+
+    np.testing.assert_allclose(outputs[0], reference_output, rtol=1e-3, atol=1e-4)
 
 
 def main() -> None:
