@@ -22,6 +22,10 @@ import {
   warmUpMlInference
 } from '../audio/mlInference';
 import {
+  detectOpenSourceAudioSources,
+  warmUpOpenSourceAudioTagger
+} from '../audio/openSourceAudioTagging';
+import {
   analyzeRuleBasedAudioIssues,
   logRuleBasedAnalysis,
   ruleAnalysisToDiagnosticProblems
@@ -148,6 +152,28 @@ function buildAnalysisResult(
   };
 }
 
+function mergeDetectedSources(result: AnalysisResult, detectedSources: AnalysisResult['detectedSources']) {
+  if (!detectedSources || detectedSources.length === 0) {
+    return result;
+  }
+
+  const detectedSourceNames = detectedSources.map((entry) => entry.source);
+
+  return {
+    ...result,
+    detectedSources,
+    problems: result.problems.map((problem) => {
+      const existingSources = problem.sources.filter((source) => source !== 'overall');
+      const mergedSources = uniqueInOrder([...detectedSourceNames, ...existingSources]);
+
+      return {
+        ...problem,
+        sources: mergedSources.length > 0 ? mergedSources : problem.sources
+      };
+    })
+  };
+}
+
 export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -219,14 +245,19 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const analyseCurrentBuffer = useCallback(async (): Promise<AnalysisResult> => {
     const snapshot = getBufferedAudio();
     const extractedFeatures = extractCurrentFeatures(snapshot);
-
-    const mlResult = await analyzeWithMlInference(extractedFeatures);
+    const [mlResult, detectedSources] = await Promise.all([
+      analyzeWithMlInference(extractedFeatures),
+      detectOpenSourceAudioSources(snapshot)
+    ]);
 
     if (mlResult) {
-      return mlResult;
+      return mergeDetectedSources(mlResult, detectedSources);
     }
 
-    return buildAnalysisResult(snapshot, extractedFeatures, 'rule-based-fallback');
+    return mergeDetectedSources(
+      buildAnalysisResult(snapshot, extractedFeatures, 'rule-based-fallback'),
+      detectedSources
+    );
   }, [extractCurrentFeatures, getBufferedAudio]);
 
   const runMonitoringPass = useCallback(async () => {
@@ -491,6 +522,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
   useEffect(() => {
     void warmUpMlInference();
+    void warmUpOpenSourceAudioTagger();
   }, []);
 
   useEffect(() => {
@@ -567,4 +599,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     stopMonitoring,
     targetSampleRate: TARGET_SAMPLE_RATE
   };
+}
+
+function uniqueInOrder<T>(values: T[]) {
+  return values.filter((value, index) => values.indexOf(value) === index);
 }

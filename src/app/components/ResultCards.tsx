@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
 import { AlertCircle, Radio, Sliders, Info, CheckCircle } from 'lucide-react';
-import type { AnalysisResult, DiagnosticProblem } from '../types';
+import type { AnalysisResult, DetectedAudioSource, DiagnosticProblem } from '../types';
 import { type Language, translations } from '../translations';
 
 interface ResultCardsProps {
@@ -36,6 +36,11 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
               <div className="text-2xl font-bold mb-2">{t.noIssues}</div>
               <div className="text-sm text-gray-400">{t.soundQualityGood}</div>
             </div>
+            <DetectedSourcesCard
+              detectedSources={result.detectedSources}
+              language={language}
+              centered
+            />
             {isLive && (
               <div className="flex items-center gap-2 text-xs text-green-400 mt-2">
                 <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
@@ -62,6 +67,11 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
         </motion.div>
       )}
 
+      <DetectedSourcesCard
+        detectedSources={result.detectedSources}
+        language={language}
+      />
+
       {/* Render all problems */}
       {result.problems.map((problem, index) => (
         <ProblemCard
@@ -74,6 +84,45 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
         />
       ))}
     </div>
+  );
+}
+
+function DetectedSourcesCard({
+  detectedSources,
+  language,
+  centered = false
+}: {
+  detectedSources?: DetectedAudioSource[];
+  language: Language;
+  centered?: boolean;
+}) {
+  if (!detectedSources || detectedSources.length === 0) {
+    return null;
+  }
+
+  const t = translations[language];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`w-full bg-gray-800/50 border border-gray-700 rounded-xl p-4 ${centered ? 'text-center' : ''}`}
+    >
+      <div className={`text-xs text-gray-400 mb-3 ${centered ? '' : 'text-left'}`}>
+        {t.detectedSources}
+      </div>
+      <div className={`flex flex-wrap gap-2 ${centered ? 'justify-center' : ''}`}>
+        {detectedSources.map((entry) => (
+          <span
+            key={entry.source}
+            className="px-3 py-1.5 bg-cyan-500/10 text-cyan-200 rounded-lg text-sm font-medium border border-cyan-500/20"
+            title={entry.labels.join(', ')}
+          >
+            {(t[entry.source as keyof typeof t] || entry.source)} {Math.round(entry.confidence * 100)}%
+          </span>
+        ))}
+      </div>
+    </motion.div>
   );
 }
 
