@@ -1,126 +1,70 @@
 # HANDOVER
 
-## 프로젝트 상태 요약
+## 한 줄 상태
 
-현재 프로젝트는 "브라우저 실시간 오디오 입력 -> feature extraction -> rule-based 분석 -> UI 표시"까지 동작하는 상태입니다.  
-추가로 향후 ML 추론을 위한 PyTorch 모델 정의와 ONNX export 스크립트까지 준비되어 있습니다.
+현재 프로젝트는 "브라우저 실시간 오디오 입력 -> feature extraction -> browser ONNX inference + rule-based analysis -> stem separation / fallback source tagging -> source-aware EQ UI"까지 연결된 상태입니다.
 
-핵심 포인트:
-- 마이크 입력 파이프라인은 이미 실시간 동작하도록 정리됨
-- 16kHz 기준 약 3초 rolling buffer 유지
-- frontend 분석은 현재 ML이 아니라 rule-based logic 사용
-- ML 모델은 별도 Python 파일로 정의되어 있으나 아직 frontend inference에 연결되지는 않음
+## 지금 실제로 되는 것
 
-## 지금까지 구현된 항목
-
-### 1. Microphone / Audio Capture
+### Frontend Runtime
 - 마이크 권한 요청 및 상태 처리
-- permission denied / unsupported / device not found 대응
-- `AudioContext` + `AnalyserNode` 기반 실시간 캡처
-- AudioWorklet 우선, 실패 시 ScriptProcessor fallback
-- 입력 sample rate를 16kHz로 정규화
-- 약 3초 분량 circular buffer 유지
+- native sample rate 오디오 캡처
+- 16kHz 분석용 resample
+- 약 3초 rolling circular buffer 유지
+- mixer-style waveform / analyzer / RMS visualization
+- 브라우저 ONNX 추론
+- rule-based 문제 감지 fallback
+- local stem service 호출
+- MediaPipe YAMNet fallback 태깅
+- 결과 UI에:
+  - 문제 카드
+  - 감지된 소스
+  - stem service 연결 상태
+  - stem별 energy / RMS
+  - 악기별 source-aware EQ
 
-관련 파일:
-- [useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts)
+### Python / ML Assets
+- PyTorch lightweight multi-head model 정의 완료
+- ONNX export 스크립트 존재
+- ML 테스트 스크립트 존재
+- stem separation sidecar 실행 스크립트 존재
+
+## 현재 분석 플로우
+
+1. [App.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/App.tsx) 에서 분석/모니터링 시작
+2. [useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts) 에서 마이크 확보
+3. native sample rate 버퍼와 16kHz 분석 버퍼를 동시에 유지
+4. [featureExtraction.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/featureExtraction.ts) 에서 log-mel / RMS 추출
+5. [mlInference.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/mlInference.ts) 로 ONNX 추론 시도
+6. 동시에 [stemSeparationClient.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/stemSeparationClient.ts) 가 local sidecar 호출
+7. stem 결과가 충분하지 않으면 [openSourceAudioTagging.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/openSourceAudioTagging.ts) 로 fallback 태깅
+8. [ruleBasedAnalysis.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/ruleBasedAnalysis.ts) 로 issue 분석
+9. [sourceAwareEq.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/sourceAwareEq.ts) 에서 instrument-aware EQ recommendation 생성
+10. [ResultCards.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/components/ResultCards.tsx) 와 [EQVisualization.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/components/EQVisualization.tsx) 에서 표시
+
+## 핵심 파일 우선순위
+
+### 가장 먼저 볼 파일
+1. [useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts)
+2. [ResultCards.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/components/ResultCards.tsx)
+3. [mlInference.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/mlInference.ts)
+4. [stemSeparationClient.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/stemSeparationClient.ts)
+5. [sourceAwareEq.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/sourceAwareEq.ts)
+
+### 분석 관련 파일
 - [audioUtils.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/audioUtils.ts)
-
-### 2. Visualization
-- 기존 레이아웃은 유지
-- mixer-style analyzer panel로 변경
-- waveform / spectrum / RMS meter를 한 패널에 표시
-
-관련 파일:
-- [EQVisualization.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/components/EQVisualization.tsx)
-
-### 3. Feature Extraction
-- 고정 길이 buffer를 기준으로 log-mel spectrogram 생성
-- framing: 25ms
-- hop: 10ms
-- Hann window
-- FFT / STFT
-- mel filter bank
-- log scaling with epsilon
-- RMS 추출
-- console debug log 추가
-
-관련 파일:
 - [featureExtraction.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/featureExtraction.ts)
+- [ruleBasedAnalysis.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/ruleBasedAnalysis.ts)
+- [openSourceAudioTagging.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/openSourceAudioTagging.ts)
 - [types.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/types.ts)
 
-### 4. Rule-Based Audio Issue Detection
-- ML 없이 deterministic rule 기반 문제 감지
-- 지원 문제:
-  - `muddy`
-  - `harsh`
-  - `buried`
-- issue별 EQ recommendation 생성
-- 기존 UI가 쓰는 `AnalysisResult.problems` 형태로 매핑
-- 동시에 structured output도 유지:
-  - `issues`
-  - `eq_recommendations`
-
-관련 파일:
-- [ruleBasedAnalysis.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/ruleBasedAnalysis.ts)
-- [useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts)
-
-### 5. PyTorch Model
-- lightweight CNN encoder
-- optional small transformer
-- multi-head output
-  - problem classification: 4 classes
-  - instrument estimation: 5-label sigmoid
-  - EQ recommendation: freq + gain
-
-관련 파일:
+### Python / ML / Export
 - [lightweight_audio_model.py](/Users/kimhajun/Downloads/LoLvlance/ml/lightweight_audio_model.py)
-
-### 6. ONNX Export
-- trained checkpoint 로드
-- ONNX-friendly wrapper 사용
-- `(1, T, 64)` 입력
-- `T` dynamic axes 처리
-- `onnxruntime-web` 호환 고려
-
-관련 파일:
 - [export_to_onnx.py](/Users/kimhajun/Downloads/LoLvlance/ml/export_to_onnx.py)
+- [stem_separation_service.py](/Users/kimhajun/Downloads/LoLvlance/ml/stem_separation_service.py)
+- [tests](/Users/kimhajun/Downloads/LoLvlance/ml/tests)
 
-## 현재 실제 동작 플로우
-
-1. 사용자가 분석 시작 또는 모니터링 시작
-2. `useMonitoring`에서 마이크 스트림 확보
-3. 입력을 16kHz로 정규화
-4. 3초 rolling buffer 갱신
-5. 분석 시 현재 buffer로 feature extraction 수행
-6. log-mel + RMS 기반 rule 분석 수행
-7. UI에 `problems`와 EQ action 문자열 표시
-8. console에는 feature shape / RMS / rule 결과 출력
-
-## 아직 안 된 것
-
-### ML 관련
-- training script 없음
-- dataset loader 없음
-- loss 정의 없음
-- checkpoint 없음
-- frontend에서 ONNX 모델 추론 없음
-- ONNX export 실사용 검증은 checkpoint 부재로 미완료
-
-### 분석 로직
-- 현재 rule-based 감지는 3개 문제만 다룸
-- `normal` class는 별도 label로 저장하지 않고 "no issues"로 처리
-- instrument estimation은 ML 모델 구조에만 있고 frontend 분석에는 아직 미반영
-
-## 다음 작업 우선순위 제안
-
-1. Python training pipeline 추가
-2. 실제 dataset schema 정리
-3. 학습 완료 checkpoint 생성
-4. `export_to_onnx.py`로 ONNX export 검증
-5. frontend에서 `onnxruntime-web` 로드 후 inference 연결
-6. rule-based vs ML 결과 비교 모드 추가
-
-## 실행 / 검증 메모
+## 실행 방법
 
 ### Frontend
 ```bash
@@ -128,15 +72,71 @@ npm install
 npm run dev
 ```
 
-### Frontend build 확인
+### Build 검증
 ```bash
 npm run build
 ```
 
-### Python syntax 확인
+## Stem Service 운영 메모
+
+기본 URL:
+
+- `http://127.0.0.1:8765`
+
+프론트에서 다른 주소를 쓰려면:
+
+```bash
+VITE_STEM_SERVICE_URL=http://127.0.0.1:8765
+```
+
+### Setup
+```bash
+bash ml/setup_stem_service.sh
+```
+
+### Run
+```bash
+bash ml/run_stem_service.sh
+```
+
+### Health Check
+```bash
+curl http://127.0.0.1:8765/health
+```
+
+### Stem Service가 켜져 있을 때 기대 동작
+- UI에 `Stem Service Connected` 표시
+- 결과 카드에 stem별 `Energy` / `RMS` 표시
+- stem 결과가 소스 감지와 source-aware EQ 추천에 반영됨
+
+### 꺼져 있을 때 동작
+- UI에 `Stem Service Fallback` 표시
+- MediaPipe YAMNet fallback 태깅만 사용
+- 이 경우 혼합 신호에서 보컬 편향이 강해질 수 있음
+
+## ML 테스트 / ONNX 검증
+
+### 테스트 환경 준비
+```bash
+bash ml/setup_test_env.sh
+```
+
+### 전체 테스트
+```bash
+bash ml/run_ml_tests.sh
+```
+
+포함 검증:
+- model forward shape/range
+- dummy checkpoint -> ONNX export
+- `onnxruntime` inference
+- PyTorch vs ONNX 출력 비교
+
+### Python syntax 체크
 ```bash
 python3 -m py_compile ml/lightweight_audio_model.py
 python3 -m py_compile ml/export_to_onnx.py
+python3 -m py_compile ml/stem_separation_service.py
 ```
 
 ### ONNX export 예시
@@ -147,18 +147,54 @@ python3 ml/export_to_onnx.py \
   --time-steps 128
 ```
 
-## 주의사항
+## 디버그 포인트
 
-- 현재 frontend 오디오 분석은 전부 TypeScript 쪽 rule engine을 사용합니다.
-- Python 모델 파일은 준비만 된 상태이며, runtime dependency로 연결되어 있지 않습니다.
-- README에도 적었지만 Python dependency manager는 아직 없습니다.
-- checkpoint format은 raw `state_dict`, `state_dict` wrapper, `model_state_dict` wrapper를 지원합니다.
+브라우저 콘솔 로그:
 
-## 작업자에게 바로 유용한 파일 우선순위
+- `[audio-features]`
+- `[audio-ml]`
+- `[audio-rules]`
+- `[audio-stems]`
+- `[audio-tags]`
 
-1. [useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts)
-2. [featureExtraction.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/featureExtraction.ts)
-3. [ruleBasedAnalysis.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/ruleBasedAnalysis.ts)
-4. [EQVisualization.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/components/EQVisualization.tsx)
-5. [lightweight_audio_model.py](/Users/kimhajun/Downloads/LoLvlance/ml/lightweight_audio_model.py)
-6. [export_to_onnx.py](/Users/kimhajun/Downloads/LoLvlance/ml/export_to_onnx.py)
+중요한 해석:
+
+- `[audio-stems]`가 찍히면 local stem service 경로 사용 중
+- `[audio-tags]`만 찍히면 브라우저 fallback 중심
+- ONNX 모델 로드/실패 여부는 `[audio-ml]` 로그로 확인
+
+## 현재 남아 있는 제약
+
+### 모델 품질
+- frontend에 연결된 ONNX 자산은 파이프라인 테스트용일 수 있어, 실제 정확도를 높이려면 학습된 checkpoint로 교체해야 함
+
+### 분석 범위
+- 문제 감지는 현재 `muddy / harsh / buried` 중심
+- 소스별 EQ는 `vocal / drums / bass / guitar / keys` 기준의 lightweight rule set
+
+### stem separation
+- local Python sidecar 필요
+- 최초 실행 시 모델 다운로드 및 warm-up 시간이 큼
+- 실시간성은 충분히 usable하지만 strict low-latency production 수준으로는 추가 최적화 필요
+
+### training pipeline
+- dataset loader 없음
+- trainer 없음
+- loss 설계 없음
+- checkpoint 생성 파이프라인 없음
+
+## 다음 작업 우선순위
+
+1. 학습 데이터 기준 training pipeline 추가
+2. 실제 학습 checkpoint로 ONNX 모델 재생성
+3. source-specific problem taxonomy 확장
+4. stem별 세분화 rule 추가
+5. UI 디버그 토글과 모델/engine 선택 토글 추가
+6. stem sidecar latency/profile 최적화
+
+## 실무적으로 기억할 점
+
+- source detection 정확도는 stem sidecar가 켜져 있을 때와 아닐 때 차이가 큼
+- 문제 카드 소스 표시는 너무 많은 악기가 한 번에 붙지 않도록 제한되어 있음
+- native sample rate 버퍼는 stem/fallback 태깅 품질 때문에 유지되고, ML feature는 16kHz 버퍼를 사용함
+- `public/models/lightweight_audio_model.onnx` 와 `public/models/lightweight_audio_model.onnx.data`를 같이 유지해야 함
