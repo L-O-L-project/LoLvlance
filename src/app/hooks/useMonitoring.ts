@@ -12,6 +12,7 @@ import {
   createBufferedAudioSnapshot,
   readCircularBuffer,
   ROLLING_BUFFER_SIZE,
+  ROLLING_BUFFER_SECONDS,
   TARGET_SAMPLE_RATE,
   resampleMonoBuffer
 } from '../audio/audioUtils';
@@ -25,6 +26,10 @@ import {
   detectOpenSourceAudioSources,
   warmUpOpenSourceAudioTagger
 } from '../audio/openSourceAudioTagging';
+import {
+  detectStemSeparatedSources,
+  warmUpStemSeparationService
+} from '../audio/stemSeparationClient';
 import {
   analyzeRuleBasedAudioIssues,
   logRuleBasedAnalysis,
@@ -199,6 +204,10 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const rollingBufferRef = useRef(new Float32Array(ROLLING_BUFFER_SIZE));
   const rollingBufferWriteIndexRef = useRef(0);
   const rollingBufferLengthRef = useRef(0);
+  const nativeRollingBufferRef = useRef(new Float32Array(48_000 * ROLLING_BUFFER_SECONDS));
+  const nativeRollingBufferWriteIndexRef = useRef(0);
+  const nativeRollingBufferLengthRef = useRef(0);
+  const nativeSampleRateRef = useRef(48_000);
 
   const clearMonitoringInterval = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -208,6 +217,28 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   }, []);
 
   const handleIncomingSamples = useCallback((samples: Float32Array, sourceSampleRate: number) => {
+    const nativeTargetLength = Math.max(1, Math.round(sourceSampleRate * ROLLING_BUFFER_SECONDS));
+
+    if (
+      nativeRollingBufferRef.current.length !== nativeTargetLength
+      || nativeSampleRateRef.current !== sourceSampleRate
+    ) {
+      nativeRollingBufferRef.current = new Float32Array(nativeTargetLength);
+      nativeRollingBufferWriteIndexRef.current = 0;
+      nativeRollingBufferLengthRef.current = 0;
+      nativeSampleRateRef.current = sourceSampleRate;
+    }
+
+    const nativeState = appendToCircularBuffer(
+      nativeRollingBufferRef.current,
+      samples,
+      nativeRollingBufferWriteIndexRef.current,
+      nativeRollingBufferLengthRef.current
+    );
+
+    nativeRollingBufferWriteIndexRef.current = nativeState.writeIndex;
+    nativeRollingBufferLengthRef.current = nativeState.filledLength;
+
     const normalizedSamples = resampleMonoBuffer(samples, sourceSampleRate, TARGET_SAMPLE_RATE);
     const nextState = appendToCircularBuffer(
       rollingBufferRef.current,
@@ -230,6 +261,16 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     return createBufferedAudioSnapshot(samples);
   }, []);
 
+  const getNativeBufferedAudio = useCallback((): BufferedAudioSnapshot => {
+    const samples = readCircularBuffer(
+      nativeRollingBufferRef.current,
+      nativeRollingBufferWriteIndexRef.current,
+      nativeRollingBufferLengthRef.current
+    );
+
+    return createBufferedAudioSnapshot(samples, nativeSampleRateRef.current);
+  }, []);
+
   const extractCurrentFeatures = useCallback((snapshot?: BufferedAudioSnapshot) => {
     const bufferedSnapshot = snapshot ?? getBufferedAudio();
     const extractedFeatures = extractAudioFeatures(bufferedSnapshot, {
@@ -244,11 +285,15 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
   const analyseCurrentBuffer = useCallback(async (): Promise<AnalysisResult> => {
     const snapshot = getBufferedAudio();
+    const nativeSnapshot = getNativeBufferedAudio();
     const extractedFeatures = extractCurrentFeatures(snapshot);
-    const [mlResult, detectedSources] = await Promise.all([
+    const [mlResult, stemDetectedSources] = await Promise.all([
       analyzeWithMlInference(extractedFeatures),
-      detectOpenSourceAudioSources(snapshot)
+      detectStemSeparatedSources(nativeSnapshot)
     ]);
+    const detectedSources = stemDetectedSources.length > 0
+      ? stemDetectedSources
+      : await detectOpenSourceAudioSources(nativeSnapshot);
 
     if (mlResult) {
       return mergeDetectedSources(mlResult, detectedSources);
@@ -258,7 +303,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       buildAnalysisResult(snapshot, extractedFeatures, 'rule-based-fallback'),
       detectedSources
     );
-  }, [extractCurrentFeatures, getBufferedAudio]);
+  }, [extractCurrentFeatures, getBufferedAudio, getNativeBufferedAudio]);
 
   const runMonitoringPass = useCallback(async () => {
     if (analysisInFlightRef.current) {
@@ -391,6 +436,9 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       clearedBuffer.fill(0);
       rollingBufferWriteIndexRef.current = 0;
       rollingBufferLengthRef.current = 0;
+      nativeRollingBufferRef.current.fill(0);
+      nativeRollingBufferWriteIndexRef.current = 0;
+      nativeRollingBufferLengthRef.current = 0;
 
       try {
         const mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -522,6 +570,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
   useEffect(() => {
     void warmUpMlInference();
+    void warmUpStemSeparationService();
     void warmUpOpenSourceAudioTagger();
   }, []);
 

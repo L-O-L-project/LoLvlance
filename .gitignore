@@ -41,6 +41,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .venv-ml/
+ml/.cache/
 *.so
 .Python
 build/

@@ -1,0 +1,2 @@
+audio-separator[cpu]>=0.44,<0.45
+imageio-ffmpeg>=0.6,<0.7

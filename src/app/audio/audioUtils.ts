@@ -147,14 +147,17 @@ export function calculatePeak(samples: Float32Array): number {
   return peak;
 }
 
-export function createBufferedAudioSnapshot(samples: Float32Array): BufferedAudioSnapshot {
-  const durationMs = (samples.length / TARGET_SAMPLE_RATE) * 1000;
+export function createBufferedAudioSnapshot(
+  samples: Float32Array,
+  sampleRate = TARGET_SAMPLE_RATE
+): BufferedAudioSnapshot {
+  const durationMs = sampleRate > 0 ? (samples.length / sampleRate) * 1000 : 0;
   const rms = calculateRms(samples);
   const peak = calculatePeak(samples);
 
   return {
     samples,
-    sampleRate: TARGET_SAMPLE_RATE,
+    sampleRate,
     durationMs,
     rms,
     peak,
