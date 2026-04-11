@@ -1,4 +1,8 @@
-import type { BufferedAudioSnapshot, DetectedAudioSource } from '../types';
+import type {
+  BufferedAudioSnapshot,
+  DetectedAudioSource,
+  StemMetric
+} from '../types';
 
 const STEM_SERVICE_URL = (import.meta.env.VITE_STEM_SERVICE_URL as string | undefined)
   ?? 'http://127.0.0.1:8765';
@@ -17,7 +21,18 @@ interface StemServiceResponse {
     confidence: number;
     rms: number;
     peak: number;
+    energy?: number;
+    energyRatio?: number;
+    sampleRate?: number;
+    frames?: number;
   }>;
+}
+
+export interface StemServiceAnalysis {
+  connected: boolean;
+  model?: string;
+  detectedSources: DetectedAudioSource[];
+  stems: StemMetric[];
 }
 
 let lastHealthCheckAt = 0;
@@ -34,13 +49,13 @@ export async function detectStemSeparatedSources(snapshot: BufferedAudioSnapshot
     || snapshot.durationMs < STEM_SERVICE_MIN_DURATION_MS
     || Date.now() < retryAfterTimestamp
   ) {
-    return [];
+    return createEmptyStemAnalysis(lastKnownAvailability);
   }
 
   const isAvailable = await checkStemServiceHealth();
 
   if (!isAvailable) {
-    return [];
+    return createEmptyStemAnalysis(false);
   }
 
   try {
@@ -61,19 +76,27 @@ export async function detectStemSeparatedSources(snapshot: BufferedAudioSnapshot
     const detectedSources = Array.isArray(payload.detectedSources)
       ? payload.detectedSources.filter(isDetectedSource)
       : [];
+    const stems = Array.isArray(payload.stems)
+      ? payload.stems.filter(isStemMetric)
+      : [];
 
     console.info('[audio-stems]', {
       model: payload.model ?? 'unknown',
       detectedSources,
-      stems: payload.stems ?? []
+      stems
     });
 
-    return detectedSources;
+    return {
+      connected: true,
+      model: payload.model,
+      detectedSources,
+      stems
+    };
   } catch (error) {
     retryAfterTimestamp = Date.now() + RETRY_BACKOFF_MS;
     lastKnownAvailability = false;
     console.warn('[audio-stems] Local stem service request failed.', error);
-    return [];
+    return createEmptyStemAnalysis(false);
   }
 }
 
@@ -163,4 +186,23 @@ function isDetectedSource(value: unknown): value is DetectedAudioSource {
     && 'confidence' in value
     && 'labels' in value
   );
+}
+
+function isStemMetric(value: unknown): value is StemMetric {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && 'stem' in value
+    && 'confidence' in value
+    && 'rms' in value
+    && 'peak' in value
+  );
+}
+
+function createEmptyStemAnalysis(connected: boolean): StemServiceAnalysis {
+  return {
+    connected,
+    detectedSources: [],
+    stems: []
+  };
 }

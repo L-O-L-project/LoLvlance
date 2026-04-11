@@ -1,6 +1,13 @@
 import { motion } from 'motion/react';
 import { AlertCircle, Radio, Sliders, Info, CheckCircle } from 'lucide-react';
-import type { AnalysisResult, DetectedAudioSource, DiagnosticProblem } from '../types';
+import { linearToDbfs } from '../audio/audioUtils';
+import type {
+  AnalysisResult,
+  DetectedAudioSource,
+  DiagnosticProblem,
+  SourceEqRecommendation,
+  StemMetric
+} from '../types';
 import { type Language, translations } from '../translations';
 
 interface ResultCardsProps {
@@ -36,10 +43,20 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
               <div className="text-2xl font-bold mb-2">{t.noIssues}</div>
               <div className="text-sm text-gray-400">{t.soundQualityGood}</div>
             </div>
+            <StemServiceStatusCard result={result} language={language} centered />
             <DetectedSourcesCard
               detectedSources={result.detectedSources}
               language={language}
               centered
+            />
+            <StemMetricsCard
+              stemMetrics={result.stemMetrics}
+              language={language}
+              centered
+            />
+            <SourceEqRecommendationsCard
+              recommendations={result.sourceEqRecommendations}
+              language={language}
             />
             {isLive && (
               <div className="flex items-center gap-2 text-xs text-green-400 mt-2">
@@ -67,8 +84,20 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
         </motion.div>
       )}
 
+      <StemServiceStatusCard result={result} language={language} />
+
       <DetectedSourcesCard
         detectedSources={result.detectedSources}
+        language={language}
+      />
+
+      <StemMetricsCard
+        stemMetrics={result.stemMetrics}
+        language={language}
+      />
+
+      <SourceEqRecommendationsCard
+        recommendations={result.sourceEqRecommendations}
         language={language}
       />
 
@@ -84,6 +113,54 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
         />
       ))}
     </div>
+  );
+}
+
+function StemServiceStatusCard({
+  result,
+  language,
+  centered = false
+}: {
+  result: AnalysisResult;
+  language: Language;
+  centered?: boolean;
+}) {
+  if (!result.stemService) {
+    return null;
+  }
+
+  const t = translations[language];
+  const connected = result.stemService.connected;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`w-full border rounded-xl p-3 ${
+        connected
+          ? 'bg-emerald-500/10 border-emerald-500/20'
+          : 'bg-amber-500/10 border-amber-500/20'
+      } ${centered ? 'text-center' : ''}`}
+    >
+      <div className={`flex items-center gap-2 ${centered ? 'justify-center' : 'justify-between'}`}>
+        <div className={`flex items-center gap-2 ${centered ? 'justify-center' : ''}`}>
+          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+          <div className={`text-xs font-semibold tracking-wide uppercase ${connected ? 'text-emerald-200' : 'text-amber-200'}`}>
+            {connected ? t.stemServiceConnected : t.stemServiceFallback}
+          </div>
+        </div>
+        {!centered && result.stemService.model && (
+          <div className="text-[10px] font-mono text-gray-400">
+            {result.stemService.model}
+          </div>
+        )}
+      </div>
+      {centered && result.stemService.model && (
+        <div className="text-[10px] font-mono text-gray-400 mt-1">
+          {result.stemService.model}
+        </div>
+      )}
+    </motion.div>
   );
 }
 
@@ -124,6 +201,123 @@ function DetectedSourcesCard({
       </div>
     </motion.div>
   );
+}
+
+function StemMetricsCard({
+  stemMetrics,
+  language,
+  centered = false
+}: {
+  stemMetrics?: StemMetric[];
+  language: Language;
+  centered?: boolean;
+}) {
+  if (!stemMetrics || stemMetrics.length === 0) {
+    return null;
+  }
+
+  const t = translations[language];
+  const visibleStems = stemMetrics
+    .filter((stem) => stem.energyRatio >= 0.01 || stem.rms >= 0.002)
+    .sort((left, right) => right.energyRatio - left.energyRatio)
+    .slice(0, 6);
+
+  if (visibleStems.length === 0) {
+    return null;
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`w-full bg-gray-800/50 border border-gray-700 rounded-xl p-4 ${centered ? 'text-center' : ''}`}
+    >
+      <div className={`text-xs text-gray-400 mb-3 ${centered ? '' : 'text-left'}`}>
+        {t.stemAnalysis}
+      </div>
+      <div className="space-y-2">
+        {visibleStems.map((stem) => (
+          <div key={`${stem.stem}-${stem.source ?? 'other'}`} className="rounded-lg bg-black/20 border border-white/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-medium text-white">
+                {stem.source ? (t[stem.source as keyof typeof t] || stem.source) : stem.stem}
+              </div>
+              <div className="text-[11px] font-mono text-cyan-300">
+                {Math.round(stem.energyRatio * 100)}%
+              </div>
+            </div>
+            <div className="mt-2 h-1.5 rounded-full bg-white/5 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
+                style={{ width: `${Math.max(4, Math.min(100, stem.energyRatio * 100))}%` }}
+              />
+            </div>
+            <div className={`mt-2 flex text-[11px] text-gray-400 ${centered ? 'justify-center gap-4' : 'justify-between'}`}>
+              <span>{t.energyShare}: {Math.round(stem.energyRatio * 100)}%</span>
+              <span>{t.rmsLevel}: {formatDbfs(stem.rms)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function SourceEqRecommendationsCard({
+  recommendations,
+  language
+}: {
+  recommendations?: SourceEqRecommendation[];
+  language: Language;
+}) {
+  if (!recommendations || recommendations.length === 0) {
+    return null;
+  }
+
+  const t = translations[language];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="w-full bg-gray-800/50 border border-gray-700 rounded-xl p-4"
+    >
+      <div className="text-xs text-gray-400 mb-3">{t.sourceEqByInstrument}</div>
+      <div className="space-y-2">
+        {recommendations.map((recommendation) => (
+          <div
+            key={`${recommendation.source}-${recommendation.freq_range}-${recommendation.gain}`}
+            className="rounded-lg border border-purple-500/15 bg-purple-500/5 p-3"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-medium text-white">
+                {t[recommendation.source as keyof typeof t] || recommendation.source}
+              </div>
+              <div className="text-[11px] font-mono text-purple-300">
+                {Math.round(recommendation.confidence * 100)}%
+              </div>
+            </div>
+            <div className="mt-1 text-sm font-mono text-purple-200">
+              {recommendation.freq_range} {recommendation.gain}
+            </div>
+            <div className="mt-1 text-xs text-gray-400">
+              {recommendation.reason}
+            </div>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function formatDbfs(rms: number) {
+  const dbfs = linearToDbfs(rms);
+
+  if (!Number.isFinite(dbfs)) {
+    return '-inf dBFS';
+  }
+
+  return `${dbfs.toFixed(1)} dBFS`;
 }
 
 interface ProblemCardProps {

@@ -23,6 +23,8 @@ DEFAULT_PORT = 8765
 DEFAULT_MODEL_FILENAME = "htdemucs_6s.yaml"
 DEFAULT_MODEL_DIR = Path("ml/.cache/audio-separator-models")
 DEFAULT_OUTPUT_DIR = Path("ml/.cache/audio-separator-output")
+SOURCE_DETECTION_MIN_ENERGY_RATIO = 0.018
+SOURCE_DETECTION_MIN_RMS = 0.0018
 
 STEM_TO_SOURCE = {
     "vocals": "vocal",
@@ -120,6 +122,8 @@ class StemSeparationService:
                         "confidence": round(self._energy_ratio(stem.energy, stem_stats), 4),
                         "rms": round(stem.rms, 6),
                         "peak": round(stem.peak, 6),
+                        "energy": round(stem.energy, 8),
+                        "energyRatio": round(self._energy_ratio(stem.energy, stem_stats), 4),
                         "sampleRate": stem.sample_rate,
                         "frames": stem.frames,
                     }
@@ -187,20 +191,38 @@ class StemSeparationService:
 
             entry = by_source.setdefault(
                 stem.source,
-                {"source": stem.source, "confidence": 0.0, "labels": []},
+                {
+                    "source": stem.source,
+                    "energy_ratio": 0.0,
+                    "peak": 0.0,
+                    "labels": [],
+                    "rms": 0.0,
+                },
             )
-            entry["confidence"] += stem.energy / total_energy
+            entry["energy_ratio"] += stem.energy / total_energy
+            entry["rms"] = max(entry["rms"], stem.rms)
+            entry["peak"] = max(entry["peak"], stem.peak)
             if stem.stem not in entry["labels"]:
                 entry["labels"].append(stem.stem)
 
         detected_sources = [
             {
                 "source": entry["source"],
-                "confidence": round(min(1.0, entry["confidence"]), 2),
+                "confidence": round(
+                    self._source_confidence(
+                        energy_ratio=entry["energy_ratio"],
+                        rms=entry["rms"],
+                        peak=entry["peak"],
+                    ),
+                    2,
+                ),
                 "labels": sorted(entry["labels"]),
             }
             for entry in by_source.values()
-            if entry["confidence"] >= 0.08
+            if (
+                entry["energy_ratio"] >= SOURCE_DETECTION_MIN_ENERGY_RATIO
+                or entry["rms"] >= SOURCE_DETECTION_MIN_RMS
+            )
         ]
 
         detected_sources.sort(key=lambda item: item["confidence"], reverse=True)
@@ -209,6 +231,12 @@ class StemSeparationService:
     def _energy_ratio(self, energy: float, stem_stats: list[StemStats]) -> float:
         total_energy = sum(stem.energy for stem in stem_stats) or 1e-8
         return energy / total_energy
+
+    def _source_confidence(self, energy_ratio: float, rms: float, peak: float) -> float:
+        rms_score = min(1.0, rms / 0.035)
+        peak_score = min(1.0, peak / 0.16)
+        confidence = energy_ratio * 0.58 + rms_score * 0.24 + peak_score * 0.18
+        return min(1.0, max(0.0, confidence))
 
 
 class StemRequestHandler(BaseHTTPRequestHandler):

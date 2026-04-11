@@ -93,6 +93,32 @@ export interface DetectedAudioSource {
   labels: string[];
 }
 
+export interface StemMetric {
+  stem: string;
+  source?: Instrument | null;
+  confidence: number;
+  rms: number;
+  peak: number;
+  energy: number;
+  energyRatio: number;
+  sampleRate: number;
+  frames: number;
+}
+
+export interface StemServiceStatus {
+  connected: boolean;
+  provider: 'stem-service' | 'browser-fallback';
+  model?: string;
+}
+
+export interface SourceEqRecommendation {
+  source: Instrument;
+  freq_range: string;
+  gain: string;
+  reason: string;
+  confidence: number;
+}
+
 export interface RuleDetection {
   issue: RuleBasedIssue;
   confidence: number;
@@ -114,6 +140,9 @@ export interface AnalysisResult {
   issues?: RuleBasedIssue[];
   eq_recommendations?: EQRecommendation[];
   detectedSources?: DetectedAudioSource[];
+  stemMetrics?: StemMetric[];
+  stemService?: StemServiceStatus;
+  sourceEqRecommendations?: SourceEqRecommendation[];
   engine?: AnalysisEngine;
   timestamp?: number;
 }

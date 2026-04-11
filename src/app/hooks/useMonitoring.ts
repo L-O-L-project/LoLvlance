@@ -30,6 +30,7 @@ import {
   detectStemSeparatedSources,
   warmUpStemSeparationService
 } from '../audio/stemSeparationClient';
+import { buildSourceAwareEqRecommendations } from '../audio/sourceAwareEq';
 import {
   analyzeRuleBasedAudioIssues,
   logRuleBasedAnalysis,
@@ -169,12 +170,133 @@ function mergeDetectedSources(result: AnalysisResult, detectedSources: AnalysisR
     detectedSources,
     problems: result.problems.map((problem) => {
       const existingSources = problem.sources.filter((source) => source !== 'overall');
-      const mergedSources = uniqueInOrder([...detectedSourceNames, ...existingSources]);
+      const mergedSources = existingSources.length === 0
+        ? detectedSourceNames.slice(0, 3)
+        : uniqueInOrder([
+            ...existingSources,
+            ...detectedSourceNames.filter((source) => !existingSources.includes(source)).slice(0, 1)
+          ]);
 
       return {
         ...problem,
         sources: mergedSources.length > 0 ? mergedSources : problem.sources
       };
+    })
+  };
+}
+
+function mergeInstrumentDetections(
+  stemDetectedSources: NonNullable<AnalysisResult['detectedSources']>,
+  fallbackDetectedSources: NonNullable<AnalysisResult['detectedSources']>,
+  stemMetrics: NonNullable<AnalysisResult['stemMetrics']>
+) {
+  const merged = new Map<
+    NonNullable<AnalysisResult['detectedSources']>[number]['source'],
+    NonNullable<AnalysisResult['detectedSources']>[number]
+  >();
+
+  const stemMetricBySource = new Map(
+    stemMetrics
+      .filter((stem) => stem.source)
+      .map((stem) => [stem.source!, stem])
+  );
+
+  stemDetectedSources.forEach((entry) => {
+    const stemMetric = stemMetricBySource.get(entry.source);
+    const weightedConfidence = clamp(
+      entry.confidence * 0.72 + (stemMetric?.energyRatio ?? 0) * 0.28,
+      0,
+      1
+    );
+
+    merged.set(entry.source, {
+      source: entry.source,
+      confidence: Number(weightedConfidence.toFixed(2)),
+      labels: uniqueInOrder(entry.labels)
+    });
+  });
+
+  fallbackDetectedSources.forEach((entry) => {
+    const existing = merged.get(entry.source);
+
+    if (!existing) {
+      const boostThreshold = stemDetectedSources.length > 0 ? 0.14 : 0.08;
+
+      if (entry.confidence >= boostThreshold) {
+        merged.set(entry.source, {
+          ...entry,
+          confidence: Number(entry.confidence.toFixed(2)),
+          labels: uniqueInOrder(entry.labels)
+        });
+      }
+
+      return;
+    }
+
+    const blendedConfidence = clamp(
+      existing.confidence * 0.78 + entry.confidence * 0.32,
+      0,
+      1
+    );
+
+    merged.set(entry.source, {
+      source: entry.source,
+      confidence: Number(Math.max(existing.confidence, blendedConfidence).toFixed(2)),
+      labels: uniqueInOrder([...existing.labels, ...entry.labels])
+    });
+  });
+
+  stemMetrics.forEach((stem) => {
+    if (!stem.source || merged.has(stem.source)) {
+      return;
+    }
+
+    if (stem.energyRatio < 0.035 && stem.rms < 0.0035) {
+      return;
+    }
+
+    merged.set(stem.source, {
+      source: stem.source,
+      confidence: Number(
+        clamp(stem.energyRatio * 0.8 + stem.rms * 3.5, 0.1, 0.72).toFixed(2)
+      ),
+      labels: [stem.stem]
+    });
+  });
+
+  return [...merged.values()]
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, 5);
+}
+
+function enrichAnalysisResult(
+  result: AnalysisResult,
+  {
+    detectedSources,
+    stemConnected,
+    stemModel,
+    stemMetrics
+  }: {
+    detectedSources: NonNullable<AnalysisResult['detectedSources']>;
+    stemConnected: boolean;
+    stemModel?: string;
+    stemMetrics: NonNullable<AnalysisResult['stemMetrics']>;
+  }
+): AnalysisResult {
+  const mergedResult = mergeDetectedSources(result, detectedSources);
+
+  return {
+    ...mergedResult,
+    stemMetrics,
+    stemService: {
+      connected: stemConnected,
+      provider: stemConnected ? 'stem-service' : 'browser-fallback',
+      model: stemModel
+    },
+    sourceEqRecommendations: buildSourceAwareEqRecommendations({
+      detectedSources,
+      issues: mergedResult.issues ?? [],
+      stemMetrics
     })
   };
 }
@@ -287,21 +409,37 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     const snapshot = getBufferedAudio();
     const nativeSnapshot = getNativeBufferedAudio();
     const extractedFeatures = extractCurrentFeatures(snapshot);
-    const [mlResult, stemDetectedSources] = await Promise.all([
+    const [mlResult, stemAnalysis] = await Promise.all([
       analyzeWithMlInference(extractedFeatures),
       detectStemSeparatedSources(nativeSnapshot)
     ]);
-    const detectedSources = stemDetectedSources.length > 0
-      ? stemDetectedSources
-      : await detectOpenSourceAudioSources(nativeSnapshot);
+    const shouldRunFallbackTagger = !stemAnalysis.connected || stemAnalysis.detectedSources.length < 3;
+    const fallbackDetectedSources = shouldRunFallbackTagger
+      ? await detectOpenSourceAudioSources(nativeSnapshot)
+      : [];
+    const detectedSources = mergeInstrumentDetections(
+      stemAnalysis.detectedSources,
+      fallbackDetectedSources,
+      stemAnalysis.stems
+    );
 
     if (mlResult) {
-      return mergeDetectedSources(mlResult, detectedSources);
+      return enrichAnalysisResult(mlResult, {
+        detectedSources,
+        stemConnected: stemAnalysis.connected,
+        stemModel: stemAnalysis.model,
+        stemMetrics: stemAnalysis.stems
+      });
     }
 
-    return mergeDetectedSources(
+    return enrichAnalysisResult(
       buildAnalysisResult(snapshot, extractedFeatures, 'rule-based-fallback'),
-      detectedSources
+      {
+        detectedSources,
+        stemConnected: stemAnalysis.connected,
+        stemModel: stemAnalysis.model,
+        stemMetrics: stemAnalysis.stems
+      }
     );
   }, [extractCurrentFeatures, getBufferedAudio, getNativeBufferedAudio]);
 
