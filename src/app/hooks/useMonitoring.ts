@@ -28,7 +28,8 @@ import {
 } from '../audio/ruleBasedAnalysis';
 
 const MONITORING_INTERVAL_MS = 4000;
-const SILENCE_THRESHOLD = 0.012;
+// -38 dBFS ≈ 0.012 linear — expressed in dBFS for clarity
+const SILENCE_THRESHOLD_DBFS = -38;
 const CAPTURE_WORKLET_NAME = 'soundfix-microphone-capture';
 const CAPTURE_WORKLET_SOURCE = `
 class SoundFixMicrophoneCaptureProcessor extends AudioWorkletProcessor {
@@ -102,8 +103,7 @@ function buildAnalysisResult(
 ): AnalysisResult {
   if (
     snapshot.samples.length < TARGET_SAMPLE_RATE / 2 ||
-    snapshot.rms < SILENCE_THRESHOLD ||
-    snapshot.peak < SILENCE_THRESHOLD * 4
+    snapshot.dbRms < SILENCE_THRESHOLD_DBFS
   ) {
     logRuleBasedAnalysis({
       issues: [],
@@ -123,8 +123,24 @@ function buildAnalysisResult(
   const ruleBasedAnalysis = analyzeRuleBasedAudioIssues(features);
   logRuleBasedAnalysis(ruleBasedAnalysis);
 
+  const problems = ruleAnalysisToDiagnosticProblems(ruleBasedAnalysis);
+
+  // Crest factor below ~3 (≈9.5 dB) indicates heavy limiting/compression.
+  // Flag it as an imbalance problem so the user knows the signal is over-compressed.
+  if (snapshot.crestFactor < 3) {
+    problems.push({
+      type: 'imbalance',
+      confidence: Math.min(0.9, 0.6 + (3 - snapshot.crestFactor) * 0.15),
+      sources: ['overall'],
+      details: ['transient_overload'],
+      actions: [
+        `Signal is heavily compressed (crest factor ${snapshot.crestFactor.toFixed(1)}×). Consider reducing limiting or gain staging.`
+      ]
+    });
+  }
+
   return {
-    problems: ruleAnalysisToDiagnosticProblems(ruleBasedAnalysis),
+    problems,
     issues: ruleBasedAnalysis.issues,
     eq_recommendations: ruleBasedAnalysis.eq_recommendations,
     engine,
@@ -349,7 +365,10 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         const mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             channelCount: { ideal: 1 },
-            sampleRate: { ideal: TARGET_SAMPLE_RATE },
+            // Do NOT constrain sampleRate here — let the browser capture at its
+            // native rate (44.1 / 48 kHz) so the AnalyserNode has full frequency
+            // coverage up to 20 kHz.  Resampling to TARGET_SAMPLE_RATE happens
+            // later in handleIncomingSamples before ML feature extraction.
             echoCancellation: false,
             noiseSuppression: false,
             autoGainControl: false
@@ -360,7 +379,10 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         let audioContext: AudioContext;
 
         try {
-          audioContext = new AudioContextClass({ latencyHint: 'interactive' });
+          // 'balanced' is better than 'interactive' for analysis: we don't need
+          // the lowest possible latency, so the browser can use larger buffers
+          // which reduces CPU overhead and jitter.
+          audioContext = new AudioContextClass({ latencyHint: 'balanced' });
         } catch {
           audioContext = new AudioContextClass();
         }
@@ -369,10 +391,15 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
         const mediaSource = audioContext.createMediaStreamSource(mediaStream);
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 2048;
-        analyser.smoothingTimeConstant = 0.82;
+        // 4096 bins → ~11 Hz/bin at 48 kHz; much better low-freq resolution.
+        analyser.fftSize = 4096;
+        // Disable built-in smoothing entirely — EQVisualization applies its own
+        // asymmetric attack/release ballistics which is more accurate.
+        analyser.smoothingTimeConstant = 0.0;
         analyser.minDecibels = -90;
-        analyser.maxDecibels = -12;
+        // -3 dBFS headroom: was -12, which clipped any signal above -12 dBFS
+        // and made loud mixes look artificially flat at the top of the spectrum.
+        analyser.maxDecibels = -3;
 
         const outputGain = audioContext.createGain();
         outputGain.gain.value = 0;

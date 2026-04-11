@@ -87,6 +87,12 @@ export interface EQRecommendation {
   reason: string;
 }
 
+export interface DetectedAudioSource {
+  source: Instrument;
+  confidence: number;
+  labels: string[];
+}
+
 export interface RuleDetection {
   issue: RuleBasedIssue;
   confidence: number;
@@ -107,6 +113,7 @@ export interface AnalysisResult {
   problems: DiagnosticProblem[];
   issues?: RuleBasedIssue[];
   eq_recommendations?: EQRecommendation[];
+  detectedSources?: DetectedAudioSource[];
   engine?: AnalysisEngine;
   timestamp?: number;
 }
@@ -121,6 +128,10 @@ export interface BufferedAudioSnapshot {
   durationMs: number;
   rms: number;
   peak: number;
+  /** RMS level in dBFS. -Infinity for silence. */
+  dbRms: number;
+  /** Peak / RMS ratio (linear). Typical music: 4–10. Over-compressed: < 3. */
+  crestFactor: number;
 }
 
 export interface ExtractedAudioFeatures {

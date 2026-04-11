@@ -4,6 +4,24 @@ export const TARGET_SAMPLE_RATE = 16_000;
 export const ROLLING_BUFFER_SECONDS = 3;
 export const ROLLING_BUFFER_SIZE = TARGET_SAMPLE_RATE * ROLLING_BUFFER_SECONDS;
 
+/** Convert linear amplitude (0–1) to dBFS. Returns -Infinity for silence. */
+export function linearToDbfs(linear: number): number {
+  if (linear <= 0) return -Infinity;
+  return 20 * Math.log10(linear);
+}
+
+/**
+ * Crest factor = peak / RMS (linear ratio).
+ * Typical speech/music: 4–10 (12–20 dB).
+ * Over-compressed masters: < 3 (< 9.5 dB).
+ * Returns 1 for silence to avoid division by zero.
+ */
+export function calculateCrestFactor(samples: Float32Array): number {
+  const rms = calculateRms(samples);
+  if (rms <= 0) return 1;
+  return calculatePeak(samples) / rms;
+}
+
 export function resampleMonoBuffer(
   input: Float32Array,
   sourceSampleRate: number,
@@ -131,12 +149,16 @@ export function calculatePeak(samples: Float32Array): number {
 
 export function createBufferedAudioSnapshot(samples: Float32Array): BufferedAudioSnapshot {
   const durationMs = (samples.length / TARGET_SAMPLE_RATE) * 1000;
+  const rms = calculateRms(samples);
+  const peak = calculatePeak(samples);
 
   return {
     samples,
     sampleRate: TARGET_SAMPLE_RATE,
     durationMs,
-    rms: calculateRms(samples),
-    peak: calculatePeak(samples)
+    rms,
+    peak,
+    dbRms: linearToDbfs(rms),
+    crestFactor: rms > 0 ? peak / rms : 1
   };
 }
