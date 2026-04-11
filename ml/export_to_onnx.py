@@ -6,7 +6,10 @@ from typing import Any
 
 import torch
 
-from lightweight_audio_model import LightweightAudioAnalysisNet, ModelConfig
+try:
+    from .lightweight_audio_model import LightweightAudioAnalysisNet, ModelConfig
+except ImportError:
+    from lightweight_audio_model import LightweightAudioAnalysisNet, ModelConfig
 
 
 class OnnxExportWrapper(torch.nn.Module):
@@ -53,8 +56,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--opset",
         type=int,
-        default=17,
-        help="ONNX opset version. 17 is a safe target for onnxruntime-web.",
+        default=18,
+        help="ONNX opset version. 18 is a safe default for recent torch exporters and onnxruntime-web.",
     )
     parser.add_argument(
         "--disable-transformer",

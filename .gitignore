@@ -40,6 +40,7 @@ dist-ssr
 __pycache__/
 *.py[cod]
 *$py.class
+.venv-ml/
 *.so
 .Python
 build/

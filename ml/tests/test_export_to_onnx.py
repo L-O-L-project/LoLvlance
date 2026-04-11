@@ -1,0 +1,99 @@
+import tempfile
+import unittest
+from argparse import Namespace
+from pathlib import Path
+
+import numpy as np
+import onnx
+import onnxruntime as ort
+import torch
+
+from ml.export_to_onnx import export_to_onnx
+from ml.lightweight_audio_model import LightweightAudioAnalysisNet
+
+
+class OnnxExportTest(unittest.TestCase):
+    def test_export_and_runtime_match_pytorch_shapes_and_ranges(self) -> None:
+        torch.manual_seed(11)
+        model = LightweightAudioAnalysisNet().eval()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "dummy_checkpoint.pt"
+            onnx_path = temp_path / "lightweight_audio_model.onnx"
+            time_steps = 128
+
+            torch.save(model.state_dict(), checkpoint_path)
+
+            export_args = Namespace(
+                checkpoint=checkpoint_path,
+                output=onnx_path,
+                time_steps=time_steps,
+                opset=18,
+                disable_transformer=False,
+                encoder_dim=128,
+                transformer_layers=2,
+                transformer_heads=4,
+                transformer_ffn_dim=256,
+                dropout=0.1,
+                mel_bins=64,
+            )
+
+            export_to_onnx(export_args)
+
+            self.assertTrue(onnx_path.exists())
+
+            onnx_model = onnx.load(onnx_path.as_posix())
+            onnx.checker.check_model(onnx_model)
+
+            input_tensor = torch.randn(1, time_steps, 64)
+            with torch.no_grad():
+                pytorch_output = model(input_tensor)
+
+            session = ort.InferenceSession(
+                onnx_path.as_posix(),
+                providers=["CPUExecutionProvider"],
+            )
+            onnx_output = session.run(
+                None,
+                {"log_mel_spectrogram": input_tensor.cpu().numpy()},
+            )
+
+            self.assertEqual(onnx_output[0].shape, (1, 4))
+            self.assertEqual(onnx_output[1].shape, (1, 5))
+            self.assertEqual(onnx_output[2].shape, (1, 1))
+            self.assertEqual(onnx_output[3].shape, (1, 1))
+
+            np.testing.assert_allclose(
+                onnx_output[0],
+                pytorch_output["problem_probs"].cpu().numpy(),
+                rtol=1e-3,
+                atol=1e-4,
+            )
+            np.testing.assert_allclose(
+                onnx_output[1],
+                pytorch_output["instrument_probs"].cpu().numpy(),
+                rtol=1e-3,
+                atol=1e-4,
+            )
+            np.testing.assert_allclose(
+                onnx_output[2],
+                pytorch_output["eq_freq"].cpu().numpy(),
+                rtol=1e-3,
+                atol=1e-4,
+            )
+            np.testing.assert_allclose(
+                onnx_output[3],
+                pytorch_output["eq_gain_db"].cpu().numpy(),
+                rtol=1e-3,
+                atol=1e-4,
+            )
+
+            self.assertTrue(np.all((onnx_output[0] >= 0) & (onnx_output[0] <= 1)))
+            self.assertTrue(np.all((onnx_output[1] >= 0) & (onnx_output[1] <= 1)))
+            self.assertTrue(np.all((onnx_output[2] >= 0) & (onnx_output[2] <= 1)))
+            self.assertTrue(np.all((onnx_output[3] >= -6) & (onnx_output[3] <= 6)))
+
+
+if __name__ == "__main__":
+    unittest.main()
