@@ -50,6 +50,7 @@ export function EQVisualization({
   const lastFrameTimeRef = useRef(0);
   const bandPeakHoldRef = useRef<number[]>(Array(baseBands.length).fill(0));
   const outputPeakHoldRef = useRef(0);
+  const smoothedSpectrumRef = useRef<Float32Array | null>(null);
   const gradientId = useId().replace(/:/g, '-');
 
   const adjustmentBands = useMemo(() => generateAdjustmentBands(problems), [problems]);
@@ -121,14 +122,21 @@ export function EQVisualization({
       const liveTimeDomainData = isActive && analyserNode && timeDomainData ? timeDomainData : null;
       const liveFrequencyData = isActive && analyserNode && frequencyData ? frequencyData : null;
 
-      if (liveTimeDomainData && liveFrequencyData) {
+      if (liveTimeDomainData && liveFrequencyData && analyserNode) {
         analyserNode.getByteTimeDomainData(liveTimeDomainData);
         analyserNode.getByteFrequencyData(liveFrequencyData);
+        if (!smoothedSpectrumRef.current || smoothedSpectrumRef.current.length !== liveFrequencyData.length) {
+          smoothedSpectrumRef.current = new Float32Array(liveFrequencyData.length);
+        }
+        updateSmoothedSpectrum(smoothedSpectrumRef.current, liveFrequencyData);
+      } else if (!isActive) {
+        smoothedSpectrumRef.current = null;
       }
 
+      const sampleRate = analyserNode?.context.sampleRate ?? TARGET_SAMPLE_RATE;
       const analyzerLevels = getDisplayBandLevels(
         liveFrequencyData,
-        analyserNode?.context.sampleRate ?? TARGET_SAMPLE_RATE,
+        sampleRate,
         adjustmentBands,
         state
       );
@@ -148,7 +156,9 @@ export function EQVisualization({
         analyzerLevels,
         adjustmentBands,
         bandPeakHoldRef.current,
-        deltaSeconds
+        deltaSeconds,
+        smoothedSpectrumRef.current,
+        sampleRate
       );
       drawOutputMeter(
         meterContext,
@@ -457,13 +467,19 @@ function drawAnalyzerPanel(
   levels: number[],
   adjustments: FrequencyBandAdjustment[],
   peakHoldLevels: number[],
-  deltaSeconds: number
+  deltaSeconds: number,
+  smoothedSpectrum: Float32Array | null,
+  sampleRate: number
 ) {
   context.clearRect(0, 0, width, height);
   context.fillStyle = '#050709';
   context.fillRect(0, 0, width, height);
 
   drawAnalyzerGrid(context, width, height);
+
+  if (smoothedSpectrum && smoothedSpectrum.length > 0) {
+    drawSpectrumCurve(context, width, height, smoothedSpectrum, sampleRate);
+  }
 
   const slotWidth = width / levels.length;
   const segmentGap = 2;
@@ -472,7 +488,7 @@ function drawAnalyzerPanel(
 
   for (let index = 0; index < levels.length; index += 1) {
     const x = index * slotWidth;
-    const trackWidth = Math.max(8, slotWidth * 0.58);
+    const trackWidth = Math.max(8, slotWidth * 0.44);
     const trackX = x + (slotWidth - trackWidth) / 2;
     const normalizedLevel = clamp(levels[index], 0.02, 1);
     const litSegments = Math.round(normalizedLevel * segmentCount);
@@ -492,7 +508,9 @@ function drawAnalyzerPanel(
     for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
       const y = height - (segmentIndex + 1) * segmentHeight - segmentIndex * segmentGap;
       const isLit = segmentIndex < litSegments;
-      context.fillStyle = getMeterSegmentColor(segmentIndex, segmentCount, isLit);
+      context.fillStyle = smoothedSpectrum
+        ? getMeterSegmentColorDimmed(segmentIndex, segmentCount, isLit)
+        : getMeterSegmentColor(segmentIndex, segmentCount, isLit);
       context.fillRect(trackX, y, trackWidth, Math.max(2, segmentHeight));
     }
 
@@ -500,6 +518,87 @@ function drawAnalyzerPanel(
     context.fillStyle = 'rgba(255, 255, 255, 0.92)';
     context.fillRect(trackX - 1, clamp(peakY, 1, height - 2), trackWidth + 2, 1.5);
   }
+}
+
+function drawSpectrumCurve(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  spectrum: Float32Array,
+  sampleRate: number
+) {
+  const nyquist = sampleRate / 2;
+  const minFreq = 20;
+  const maxFreq = Math.min(nyquist, 20000);
+  const logMin = Math.log10(minFreq);
+  const logMax = Math.log10(maxFreq);
+
+  const points: Array<[number, number]> = [];
+
+  for (let px = 0; px < width; px += 1) {
+    const logFreq = logMin + (px / (width - 1)) * (logMax - logMin);
+    const freq = Math.pow(10, logFreq);
+    const binIndex = (freq / nyquist) * (spectrum.length - 1);
+    const binFloor = Math.floor(binIndex);
+    const binCeil = Math.min(spectrum.length - 1, binFloor + 1);
+    const fraction = binIndex - binFloor;
+    const val = spectrum[binFloor] + (spectrum[binCeil] - spectrum[binFloor]) * fraction;
+    points.push([px, (1 - val) * height]);
+  }
+
+  const gradient = context.createLinearGradient(0, 0, 0, height);
+  gradient.addColorStop(0, 'rgba(6, 182, 212, 0.35)');
+  gradient.addColorStop(0.55, 'rgba(6, 182, 212, 0.12)');
+  gradient.addColorStop(1, 'rgba(6, 182, 212, 0.02)');
+
+  context.beginPath();
+  context.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i += 1) {
+    context.lineTo(points[i][0], points[i][1]);
+  }
+  context.lineTo(width, height);
+  context.lineTo(0, height);
+  context.closePath();
+  context.fillStyle = gradient;
+  context.fill();
+
+  context.beginPath();
+  context.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i += 1) {
+    context.lineTo(points[i][0], points[i][1]);
+  }
+  context.strokeStyle = 'rgba(6, 182, 212, 0.85)';
+  context.lineWidth = 1.5;
+  context.lineJoin = 'round';
+  context.stroke();
+}
+
+function updateSmoothedSpectrum(smoothed: Float32Array, current: Uint8Array) {
+  for (let i = 0; i < smoothed.length; i += 1) {
+    const newVal = current[i] / 255;
+    const prevVal = smoothed[i];
+    // Fast attack (0.3 prev weight), slow release (0.85 prev weight)
+    const coeff = newVal > prevVal ? 0.3 : 0.85;
+    smoothed[i] = coeff * prevVal + (1 - coeff) * newVal;
+  }
+}
+
+function getMeterSegmentColorDimmed(segmentIndex: number, segmentCount: number, isLit: boolean) {
+  if (!isLit) {
+    return 'rgba(30, 41, 59, 0.25)';
+  }
+
+  const ratio = segmentIndex / (segmentCount - 1);
+
+  if (ratio > 0.82) {
+    return 'rgba(239, 68, 68, 0.55)';
+  }
+
+  if (ratio > 0.62) {
+    return 'rgba(250, 204, 21, 0.55)';
+  }
+
+  return 'rgba(74, 222, 128, 0.5)';
 }
 
 function drawAnalyzerGrid(context: CanvasRenderingContext2D, width: number, height: number) {
@@ -656,14 +755,16 @@ function getFrequencyBandLevel(
   targetFrequency: number
 ) {
   const nyquist = sampleRate / 2;
-  const normalizedFrequency = clamp(targetFrequency / nyquist, 0, 1);
-  const centerIndex = Math.round(normalizedFrequency * (frequencyData.length - 1));
-  const startIndex = Math.max(0, centerIndex - 2);
-  const endIndex = Math.min(frequencyData.length - 1, centerIndex + 2);
+  // Use 1/2-octave bandwidth (factor of sqrt(2)) for more accurate band averaging
+  const halfOctave = Math.SQRT2;
+  const freqLow = targetFrequency / halfOctave;
+  const freqHigh = targetFrequency * halfOctave;
+  const binLow = Math.max(0, Math.round((freqLow / nyquist) * (frequencyData.length - 1)));
+  const binHigh = Math.min(frequencyData.length - 1, Math.round((freqHigh / nyquist) * (frequencyData.length - 1)));
   let total = 0;
   let count = 0;
 
-  for (let index = startIndex; index <= endIndex; index += 1) {
+  for (let index = binLow; index <= binHigh; index += 1) {
     total += frequencyData[index];
     count += 1;
   }

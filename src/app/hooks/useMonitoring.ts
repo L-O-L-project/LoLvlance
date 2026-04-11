@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AnalysisResult,
+  AnalysisEngine,
   BufferedAudioSnapshot,
   ExtractedAudioFeatures,
   MicrophoneErrorCode,
@@ -15,6 +16,11 @@ import {
   resampleMonoBuffer
 } from '../audio/audioUtils';
 import { extractAudioFeatures, logExtractedAudioFeatures } from '../audio/featureExtraction';
+import {
+  analyzeWithMlInference,
+  MODEL_MEL_BIN_COUNT,
+  warmUpMlInference
+} from '../audio/mlInference';
 import {
   analyzeRuleBasedAudioIssues,
   logRuleBasedAnalysis,
@@ -91,7 +97,8 @@ function getAudioContextConstructor(): AudioContextConstructor | null {
 
 function buildAnalysisResult(
   snapshot: BufferedAudioSnapshot,
-  features: ExtractedAudioFeatures
+  features: ExtractedAudioFeatures,
+  engine: AnalysisEngine = 'rule-based'
 ): AnalysisResult {
   if (
     snapshot.samples.length < TARGET_SAMPLE_RATE / 2 ||
@@ -108,6 +115,7 @@ function buildAnalysisResult(
       problems: [],
       issues: [],
       eq_recommendations: [],
+      engine,
       timestamp: Date.now()
     };
   }
@@ -119,6 +127,7 @@ function buildAnalysisResult(
     problems: ruleAnalysisToDiagnosticProblems(ruleBasedAnalysis),
     issues: ruleBasedAnalysis.issues,
     eq_recommendations: ruleBasedAnalysis.eq_recommendations,
+    engine,
     timestamp: Date.now()
   };
 }
@@ -135,6 +144,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const setupPromiseRef = useRef<Promise<boolean> | null>(null);
   const permissionStatusRef = useRef<PermissionStatus | null>(null);
   const workletModuleUrlRef = useRef<string | null>(null);
+  const analysisInFlightRef = useRef(false);
+  const captureSessionIdRef = useRef(0);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -179,7 +190,9 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
   const extractCurrentFeatures = useCallback((snapshot?: BufferedAudioSnapshot) => {
     const bufferedSnapshot = snapshot ?? getBufferedAudio();
-    const extractedFeatures = extractAudioFeatures(bufferedSnapshot);
+    const extractedFeatures = extractAudioFeatures(bufferedSnapshot, {
+      melBinCount: MODEL_MEL_BIN_COUNT
+    });
 
     setLatestFeatures(extractedFeatures);
     logExtractedAudioFeatures(extractedFeatures);
@@ -187,13 +200,43 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     return extractedFeatures;
   }, [getBufferedAudio]);
 
-  const analyseCurrentBuffer = useCallback((): AnalysisResult => {
+  const analyseCurrentBuffer = useCallback(async (): Promise<AnalysisResult> => {
     const snapshot = getBufferedAudio();
     const extractedFeatures = extractCurrentFeatures(snapshot);
-    return buildAnalysisResult(snapshot, extractedFeatures);
+
+    const mlResult = await analyzeWithMlInference(extractedFeatures);
+
+    if (mlResult) {
+      return mlResult;
+    }
+
+    return buildAnalysisResult(snapshot, extractedFeatures, 'rule-based-fallback');
   }, [extractCurrentFeatures, getBufferedAudio]);
 
+  const runMonitoringPass = useCallback(async () => {
+    if (analysisInFlightRef.current) {
+      return false;
+    }
+
+    const activeSessionId = captureSessionIdRef.current;
+    analysisInFlightRef.current = true;
+
+    try {
+      const nextResult = await analyseCurrentBuffer();
+
+      if (activeSessionId !== captureSessionIdRef.current) {
+        return false;
+      }
+
+      onUpdate(nextResult);
+      return true;
+    } finally {
+      analysisInFlightRef.current = false;
+    }
+  }, [analyseCurrentBuffer, onUpdate]);
+
   const stopCapture = useCallback(() => {
+    captureSessionIdRef.current += 1;
     setIsCapturing(false);
     setAnalyserNode(null);
 
@@ -404,20 +447,24 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
     clearMonitoringInterval();
     setIsMonitoring(true);
-    onUpdate(analyseCurrentBuffer());
+    await runMonitoringPass();
 
     intervalRef.current = window.setInterval(() => {
-      onUpdate(analyseCurrentBuffer());
+      void runMonitoringPass();
     }, MONITORING_INTERVAL_MS);
 
     return true;
-  }, [analyseCurrentBuffer, clearMonitoringInterval, ensureMicrophoneReady, onUpdate]);
+  }, [clearMonitoringInterval, ensureMicrophoneReady, runMonitoringPass]);
 
   const stopMonitoring = useCallback(() => {
     clearMonitoringInterval();
     setIsMonitoring(false);
     stopCapture();
   }, [clearMonitoringInterval, stopCapture]);
+
+  useEffect(() => {
+    void warmUpMlInference();
+  }, []);
 
   useEffect(() => {
     if (!navigator.mediaDevices?.getUserMedia) {
