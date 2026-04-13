@@ -6,6 +6,22 @@ LoLvlance is a real-time audio analysis system focused on one product goal:
 
 The current implementation captures microphone audio in the browser, extracts audio features locally, runs a lightweight ONNX model in-browser, and combines ML outputs with deterministic rules to produce issue labels, source context, and suggested EQ moves.
 
+## Quick Links
+
+[![Overview](https://img.shields.io/badge/Project%20Overview-2563EB?style=for-the-badge&logo=bookstack&logoColor=white)](#project-overview)
+[![Architecture](https://img.shields.io/badge/System%20Architecture-7C3AED?style=for-the-badge&logo=appveyor&logoColor=white)](#system-architecture)
+[![ML Status](https://img.shields.io/badge/Current%20ML%20Status-DC2626?style=for-the-badge&logo=pytorch&logoColor=white)](#current-ml-status)
+[![Schema](https://img.shields.io/badge/Model%20Output%20Schema-0891B2?style=for-the-badge&logo=onnx&logoColor=white)](#model-output-schema)
+
+[![Folders](https://img.shields.io/badge/Folder%20Structure-0F766E?style=for-the-badge&logo=files&logoColor=white)](#folder-structure)
+[![Run](https://img.shields.io/badge/How%20to%20Run-16A34A?style=for-the-badge&logo=vite&logoColor=white)](#how-to-run)
+[![Limits](https://img.shields.io/badge/Known%20Limitations-D97706?style=for-the-badge&logo=target&logoColor=white)](#known-limitations)
+[![Roadmap](https://img.shields.io/badge/Next%20Steps-1D4ED8?style=for-the-badge&logo=roadmapdotsh&logoColor=white)](#next-steps)
+
+[![Korean README](https://img.shields.io/badge/Korean-README-111827?style=for-the-badge&logo=readme&logoColor=white)](README.ko.md)
+[![Developer Handover](https://img.shields.io/badge/Developer-Handover-111827?style=for-the-badge&logo=gitbook&logoColor=white)](HANDOVER.md)
+[![ML Docs](https://img.shields.io/badge/ML-README-111827?style=for-the-badge&logo=pytorch&logoColor=white)](ML_README.md)
+
 ## Language Versions
 
 - English:
@@ -17,6 +33,7 @@ The current implementation captures microphone audio in the browser, extracts au
   - `HANDOVER.ko.md`
   - `ML_README.ko.md`
 
+<a id="project-overview"></a>
 ## 1. Project Overview
 
 LoLvlance is designed to answer three questions in real time:
@@ -32,6 +49,7 @@ Today, those responsibilities are split across ML and rules:
 
 This is a browser-first system. There is no cloud inference path and there is no production data collection pipeline yet.
 
+<a id="system-architecture"></a>
 ## 2. System Architecture
 
 ### End-to-End Flow
@@ -68,6 +86,7 @@ Mic Input
 - **Rule role**
   Handle silence gating, derive higher-level diagnoses, project EQ guidance, merge source detections, and recover gracefully if ML is unavailable.
 
+<a id="current-ml-status"></a>
 ## 3. Current ML Status
 
 This section is intentionally explicit because it matters for anyone evaluating the current system.
@@ -83,6 +102,7 @@ This section is intentionally explicit because it matters for anyone evaluating 
 
 In short: the infrastructure is real, the checkpoint is not production-grade.
 
+<a id="model-output-schema"></a>
 ## 4. Model Output Schema
 
 The frontend now expects this schema directly from ONNX:
@@ -131,6 +151,7 @@ They are currently produced by a deterministic projection layer in `ml/onnx_sche
 
 That keeps the browser contract stable while the trainable model remains two-head only.
 
+<a id="folder-structure"></a>
 ## 5. Folder Structure
 
 ### Key Directories
@@ -157,6 +178,7 @@ That keeps the browser contract stable while the trainable model remains two-hea
 - `public/models/lightweight_audio_model.onnx.data`
   Left over from an older external-data export. The current runtime model is the standalone `.onnx` file.
 
+<a id="how-to-run"></a>
 ## 6. How to Run
 
 ### Frontend
@@ -230,6 +252,7 @@ $env:PYTHONPATH = (Get-Location).Path
 npm run build
 ```
 
+<a id="known-limitations"></a>
 ## 7. Known Limitations
 
 - The current model is trained on synthetic data only.
@@ -243,6 +266,7 @@ npm run build
 - Silence is gated before inference. Very quiet inputs return an empty result instead of full ML output.
 - The optional stem service is a separate dependency. If it is not running, the UI may show a stem-service fallback even when browser ML is healthy.
 
+<a id="next-steps"></a>
 ## 8. Next Steps
 
 - Train on real public datasets instead of synthetic fallback data.

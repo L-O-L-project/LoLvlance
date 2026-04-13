@@ -14,6 +14,18 @@
 
 영문 버전: `ML_README.md`
 
+## 바로가기
+
+[![모델 아키텍처](https://img.shields.io/badge/%EB%AA%A8%EB%8D%B8%20%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98-2563EB?style=for-the-badge&logo=pytorch&logoColor=white)](#model-architecture)
+[![학습 상세](https://img.shields.io/badge/%ED%95%99%EC%8A%B5%20%EC%83%81%EC%84%B8-7C3AED?style=for-the-badge&logo=python&logoColor=white)](#training-details)
+[![Synthetic 데이터](https://img.shields.io/badge/Synthetic%20%EB%8D%B0%EC%9D%B4%ED%84%B0-DC2626?style=for-the-badge&logo=databricks&logoColor=white)](#synthetic-dataset-explanation)
+[![평가 전략](https://img.shields.io/badge/%ED%8F%89%EA%B0%80%20%EC%A0%84%EB%9E%B5-0891B2?style=for-the-badge&logo=target&logoColor=white)](#evaluation-strategy)
+
+[![English ML Docs](https://img.shields.io/badge/English-ML%20README-111827?style=for-the-badge&logo=readme&logoColor=white)](ML_README.md)
+[![메인 README](https://img.shields.io/badge/%EB%A9%94%EC%9D%B8-README-111827?style=for-the-badge&logo=gitbook&logoColor=white)](README.ko.md)
+[![개발자 Handover](https://img.shields.io/badge/%EA%B0%9C%EB%B0%9C%EC%9E%90-Handover-111827?style=for-the-badge&logo=files&logoColor=white)](HANDOVER.ko.md)
+
+<a id="model-architecture"></a>
 ## 1. 모델 아키텍처
 
 ### Trainable Network
@@ -134,6 +146,7 @@ schema source-of-truth:
 - learned EQ head는 없습니다.
 - `eq_freq`, `eq_gain_db`는 deterministic projection입니다.
 
+<a id="training-details"></a>
 ## 2. 학습 상세
 
 ### 전처리
@@ -291,6 +304,7 @@ flowchart TD
 
 이 숫자는 synthetic task에서 pipeline이 학습되고 있다는 의미일 뿐이며, production accuracy를 의미하지는 않습니다.
 
+<a id="synthetic-dataset-explanation"></a>
 ## 3. Synthetic Dataset 설명
 
 ### 왜 필요한가
@@ -360,6 +374,7 @@ synthetic checkpoint는 다음으로 해석해야 합니다.
 - production-quality classifier
 - 실제 환경에서 신뢰할 수 있는 diagnosis model
 
+<a id="evaluation-strategy"></a>
 ## 4. 평가 전략
 
 ### 새 체크포인트를 받아들이기 전 최소 체크리스트

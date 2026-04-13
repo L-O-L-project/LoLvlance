@@ -12,6 +12,18 @@ The main point to keep in mind is that the current system is **ML-integrated and
 
 Korean version: `ML_README.ko.md`
 
+## Quick Links
+
+[![Architecture](https://img.shields.io/badge/Model%20Architecture-2563EB?style=for-the-badge&logo=pytorch&logoColor=white)](#model-architecture)
+[![Training](https://img.shields.io/badge/Training%20Details-7C3AED?style=for-the-badge&logo=python&logoColor=white)](#training-details)
+[![Synthetic Data](https://img.shields.io/badge/Synthetic%20Dataset-DC2626?style=for-the-badge&logo=databricks&logoColor=white)](#synthetic-dataset-explanation)
+[![Evaluation](https://img.shields.io/badge/Evaluation%20Strategy-0891B2?style=for-the-badge&logo=target&logoColor=white)](#evaluation-strategy)
+
+[![Korean ML Docs](https://img.shields.io/badge/Korean-ML%20README-111827?style=for-the-badge&logo=readme&logoColor=white)](ML_README.ko.md)
+[![Main README](https://img.shields.io/badge/Main-README-111827?style=for-the-badge&logo=gitbook&logoColor=white)](README.md)
+[![Handover](https://img.shields.io/badge/Developer-Handover-111827?style=for-the-badge&logo=files&logoColor=white)](HANDOVER.md)
+
+<a id="model-architecture"></a>
 ## 1. Model Architecture
 
 ### Trainable Network
@@ -132,6 +144,7 @@ Important:
 - there is no learned EQ head
 - `eq_freq` and `eq_gain_db` are deterministic projections
 
+<a id="training-details"></a>
 ## 2. Training Details
 
 ### Preprocessing
@@ -289,6 +302,7 @@ The current validated run produced:
 
 These numbers only show that the pipeline is learning something on the synthetic task. They do not imply production accuracy.
 
+<a id="synthetic-dataset-explanation"></a>
 ## 3. Synthetic Dataset Explanation
 
 ### Why It Exists
@@ -358,6 +372,7 @@ It should not be treated as:
 - a production-quality classifier
 - a trustworthy real-world diagnosis model
 
+<a id="evaluation-strategy"></a>
 ## 4. Evaluation Strategy
 
 ### Minimum Checks Before Accepting a New Checkpoint

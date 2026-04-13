@@ -11,6 +11,19 @@ The short version is:
 
 Korean version: `HANDOVER.ko.md`
 
+## Quick Links
+
+[![Completed](https://img.shields.io/badge/Completed%20Work-2563EB?style=for-the-badge&logo=checkmarx&logoColor=white)](#completed-work)
+[![Not Done](https://img.shields.io/badge/Not%20Done-DC2626?style=for-the-badge&logo=verizon&logoColor=white)](#not-done)
+[![Critical Files](https://img.shields.io/badge/Critical%20Files-7C3AED?style=for-the-badge&logo=files&logoColor=white)](#critical-files)
+[![ML Pipeline](https://img.shields.io/badge/ML%20Pipeline-0891B2?style=for-the-badge&logo=pytorch&logoColor=white)](#ml-pipeline-details)
+
+[![ONNX](https://img.shields.io/badge/ONNX%20Integration-0F766E?style=for-the-badge&logo=onnx&logoColor=white)](#onnx-integration)
+[![Rule EQ](https://img.shields.io/badge/Rule--Based%20EQ-D97706?style=for-the-badge&logo=beatsbydre&logoColor=white)](#rule-based-eq-system)
+[![Retrain](https://img.shields.io/badge/Retrain%20Guide-16A34A?style=for-the-badge&logo=python&logoColor=white)](#how-to-retrain-the-model)
+[![Failure Points](https://img.shields.io/badge/Failure%20Points-1D4ED8?style=for-the-badge&logo=sentry&logoColor=white)](#common-failure-points)
+
+<a id="completed-work"></a>
 ## 1. What Has Been Completed
 
 ### ML and Export Pipeline
@@ -64,6 +77,7 @@ Korean version: `HANDOVER.ko.md`
   - `ml/checkpoints/lightweight_audio_model.onnx`
   - `public/models/lightweight_audio_model.onnx`
 
+<a id="not-done"></a>
 ## 2. What Is NOT Done
 
 - No real public datasets are installed locally in this workspace.
@@ -76,6 +90,7 @@ Korean version: `HANDOVER.ko.md`
 
 Treat the current checkpoint as an integration artifact, not a production model.
 
+<a id="critical-files"></a>
 ## 3. Critical Files
 
 - `ml/model.py`
@@ -107,6 +122,7 @@ Treat the current checkpoint as an integration artifact, not a production model.
 - `src/app/audio/ruleBasedAnalysis.ts`
   Fallback issue detector if browser ML is unavailable.
 
+<a id="ml-pipeline-details"></a>
 ## 4. ML Pipeline Details
 
 ### Input Format
@@ -225,6 +241,7 @@ Important caveat:
 - `keys` has support in all `44` synthetic samples, so the current source model is biased.
 - That bias is visible in browser tests where real voice and music do not separate cleanly by source.
 
+<a id="onnx-integration"></a>
 ## 5. ONNX Integration
 
 ### Export Contract
@@ -307,6 +324,7 @@ This includes:
 - issue-to-source-affinity mappings
 - fallback EQ mappings
 
+<a id="rule-based-eq-system"></a>
 ## 6. Rule-Based EQ System
 
 EQ is not currently learned.
@@ -360,6 +378,7 @@ If browser ML fails entirely, the app can still:
 - detect basic issues like `muddy`, `harsh`, and `buried`
 - provide basic EQ suggestions
 
+<a id="how-to-retrain-the-model"></a>
 ## 7. How to Retrain the Model
 
 ### Step 1: Create the Python Environment
@@ -450,6 +469,7 @@ Then verify:
 - no missing output-key errors appear
 - no `[audio-ml] Inference failed...` warnings appear during normal inference
 
+<a id="common-failure-points"></a>
 ## 8. Common Failure Points
 
 ### 1. Model Fails to Load in Browser
