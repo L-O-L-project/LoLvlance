@@ -1,0 +1,12 @@
+{
+  "mel_bins": 64,
+  "conv_channels": [
+    24,
+    48,
+    72,
+    96
+  ],
+  "hidden_dim": 96,
+  "dropout": 0.15,
+  "enable_cause_head": false
+}

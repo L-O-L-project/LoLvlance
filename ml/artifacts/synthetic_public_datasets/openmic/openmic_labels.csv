@@ -1,0 +1,9 @@
+sample_key,singer,guitar
+buried_vocal_train,1,0
+nasal_vocal_train,1,0
+sibilant_vocal_train,1,0
+guitar_presence_train,0,1
+buried_vocal_val,1,0
+nasal_vocal_val,1,0
+sibilant_vocal_val,1,0
+guitar_presence_val,0,1

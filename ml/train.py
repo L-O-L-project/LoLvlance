@@ -269,6 +269,15 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
     }
     history_path = args.checkpoint_dir / "training_history.json"
     history_path.write_text(json.dumps(final_summary, indent=2), encoding="utf-8")
+    (args.checkpoint_dir / "config.json").write_text(
+        json.dumps(model_config.to_dict(), indent=2),
+        encoding="utf-8",
+    )
+    (args.checkpoint_dir / "thresholds.json").write_text(
+        json.dumps(threshold_payload, indent=2),
+        encoding="utf-8",
+    )
+    torch.save(best_state_dict, args.checkpoint_dir / "model.pt")
 
     save_checkpoint(
         checkpoint_path=best_checkpoint_path,

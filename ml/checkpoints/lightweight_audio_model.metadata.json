@@ -1,0 +1,217 @@
+{
+  "schema_version": "2.0.0",
+  "issue_labels": [
+    "muddy",
+    "harsh",
+    "buried",
+    "boomy",
+    "thin",
+    "boxy",
+    "nasal",
+    "sibilant",
+    "dull"
+  ],
+  "primary_issue_labels": [
+    "muddy",
+    "harsh",
+    "buried"
+  ],
+  "source_labels": [
+    "vocal",
+    "guitar",
+    "bass",
+    "drums",
+    "keys"
+  ],
+  "derived_diagnosis_labels": [
+    "vocal_buried",
+    "guitar_harsh",
+    "bass_muddy",
+    "drums_overpower",
+    "keys_masking"
+  ],
+  "cause_metadata_labels": [
+    "low_frequency_buildup",
+    "low_mid_overlap",
+    "boxy_resonance",
+    "room_resonance",
+    "overlapping_sources",
+    "high_frequency_spike",
+    "sibilance",
+    "cymbal_dominance",
+    "guitar_presence_peak",
+    "mid_range_masking",
+    "lack_of_presence",
+    "competing_sources",
+    "level_too_low",
+    "level_imbalance",
+    "tonal_imbalance",
+    "bass_overpower",
+    "drums_dominance",
+    "missing_low_end",
+    "missing_high_end",
+    "boomy_resonance",
+    "nasal_peak",
+    "transient_overload",
+    "frequency_gap"
+  ],
+  "thresholds": {
+    "issue_thresholds": {
+      "muddy": 0.55,
+      "harsh": 0.4,
+      "buried": 0.45,
+      "boomy": 0.6,
+      "thin": 0.45,
+      "boxy": 0.55,
+      "nasal": 0.55,
+      "sibilant": 0.4,
+      "dull": 0.55
+    },
+    "source_thresholds": {
+      "vocal": 0.5,
+      "guitar": 0.55,
+      "bass": 0.6,
+      "drums": 0.55,
+      "keys": 0.5
+    },
+    "derived_thresholds": {
+      "vocal_buried": 0.55,
+      "guitar_harsh": 0.55,
+      "bass_muddy": 0.55,
+      "drums_overpower": 0.58,
+      "keys_masking": 0.56
+    }
+  },
+  "issue_to_causes": {
+    "muddy": [
+      "low_frequency_buildup",
+      "low_mid_overlap",
+      "boxy_resonance",
+      "overlapping_sources"
+    ],
+    "harsh": [
+      "high_frequency_spike",
+      "sibilance",
+      "guitar_presence_peak"
+    ],
+    "buried": [
+      "mid_range_masking",
+      "lack_of_presence",
+      "competing_sources",
+      "level_too_low"
+    ],
+    "boomy": [
+      "low_frequency_buildup",
+      "boomy_resonance",
+      "room_resonance"
+    ],
+    "thin": [
+      "missing_low_end",
+      "frequency_gap"
+    ],
+    "boxy": [
+      "boxy_resonance",
+      "low_mid_overlap"
+    ],
+    "nasal": [
+      "nasal_peak",
+      "mid_range_masking"
+    ],
+    "sibilant": [
+      "sibilance"
+    ],
+    "dull": [
+      "missing_high_end",
+      "frequency_gap"
+    ]
+  },
+  "issue_to_source_affinity": {
+    "muddy": [
+      "bass",
+      "guitar",
+      "keys"
+    ],
+    "harsh": [
+      "vocal",
+      "guitar",
+      "drums"
+    ],
+    "buried": [
+      "vocal",
+      "guitar",
+      "keys"
+    ],
+    "boomy": [
+      "bass",
+      "drums"
+    ],
+    "thin": [
+      "bass",
+      "guitar"
+    ],
+    "boxy": [
+      "vocal",
+      "guitar",
+      "keys"
+    ],
+    "nasal": [
+      "vocal",
+      "guitar"
+    ],
+    "sibilant": [
+      "vocal"
+    ],
+    "dull": [
+      "guitar",
+      "keys",
+      "drums"
+    ]
+  },
+  "issue_fallback_eq": {
+    "muddy": {
+      "frequency_hz": 315.0,
+      "gain_db": -3.0,
+      "reason": "reduce low-mid buildup"
+    },
+    "harsh": {
+      "frequency_hz": 5600.0,
+      "gain_db": -2.5,
+      "reason": "tame upper-mid harshness"
+    },
+    "buried": {
+      "frequency_hz": 3000.0,
+      "gain_db": 2.5,
+      "reason": "restore presence and intelligibility"
+    },
+    "boomy": {
+      "frequency_hz": 120.0,
+      "gain_db": -3.0,
+      "reason": "tighten low-end resonance"
+    },
+    "thin": {
+      "frequency_hz": 110.0,
+      "gain_db": 2.5,
+      "reason": "restore low-end weight"
+    },
+    "boxy": {
+      "frequency_hz": 650.0,
+      "gain_db": -2.5,
+      "reason": "reduce boxy midrange resonance"
+    },
+    "nasal": {
+      "frequency_hz": 1100.0,
+      "gain_db": -2.0,
+      "reason": "soften nasal midrange focus"
+    },
+    "sibilant": {
+      "frequency_hz": 6500.0,
+      "gain_db": -2.5,
+      "reason": "control sibilant edge"
+    },
+    "dull": {
+      "frequency_hz": 6500.0,
+      "gain_db": 2.0,
+      "reason": "restore brightness and air"
+    }
+  }
+}

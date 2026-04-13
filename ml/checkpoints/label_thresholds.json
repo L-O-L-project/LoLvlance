@@ -1,0 +1,22 @@
+{
+  "schema_version": "2.0.0",
+  "issue_thresholds": {
+    "muddy": 0.55,
+    "harsh": 0.4,
+    "buried": 0.45,
+    "boomy": 0.6,
+    "thin": 0.45,
+    "boxy": 0.55,
+    "nasal": 0.55,
+    "sibilant": 0.4,
+    "dull": 0.55
+  },
+  "source_thresholds": {
+    "vocal": 0.5,
+    "guitar": 0.55,
+    "bass": 0.6,
+    "drums": 0.55,
+    "keys": 0.5
+  },
+  "best_epoch": 10
+}

@@ -1,0 +1,7 @@
+fname,labels
+dull_piano_train,piano
+boxy_piano_train,piano
+thin_synth_train,synth
+dull_piano_val,piano
+boxy_piano_val,piano
+thin_synth_val,synth
