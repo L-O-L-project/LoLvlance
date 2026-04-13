@@ -32,9 +32,8 @@ type OrtModule = typeof import('onnxruntime-web');
 interface ParsedModelOutputs {
   issueScores: Record<TrainableIssueLabel, number>;
   sourceScores: Record<SourceLabel, number>;
-  legacyEqFrequencyNormalized: number | null;
-  legacyEqGainDb: number | null;
-  usesLegacyOutputs: boolean;
+  modelEqFrequencyNormalized: number;
+  modelEqGainDb: number;
 }
 
 let ortModulePromise: Promise<OrtModule> | null = null;
@@ -97,11 +96,11 @@ export async function analyzeWithMlInference(
     const result = buildAnalysisResult({
       mlOutput,
       detectedSources,
-      legacyEqFrequencyNormalized: parsedOutputs.legacyEqFrequencyNormalized,
-      legacyEqGainDb: parsedOutputs.legacyEqGainDb
+      modelEqFrequencyNormalized: parsedOutputs.modelEqFrequencyNormalized,
+      modelEqGainDb: parsedOutputs.modelEqGainDb
     });
 
-    logMlInference(result.ml_output, parsedOutputs.usesLegacyOutputs);
+    logMlInference(result.ml_output);
     return result;
   } catch (error) {
     console.warn('[audio-ml] Inference failed. Falling back to the rule-based engine.', error);
@@ -142,11 +141,8 @@ function parseModelOutputs(
   outputs: Awaited<ReturnType<import('onnxruntime-web').InferenceSession['run']>>
 ): ParsedModelOutputs {
   const outputMap = outputs as Record<string, unknown>;
-  const issueTensor = outputMap.issue_probs ?? outputMap.problem_probs;
-  const sourceTensor = outputMap.source_probs ?? outputMap.instrument_probs;
-  const rawIssueScores = readTensorData(issueTensor, outputMap.issue_probs ? 'issue_probs' : 'problem_probs');
-  const rawSourceScores = readOptionalTensorData(sourceTensor, SOURCE_LABELS.length);
-  const usesLegacyOutputs = !('issue_probs' in outputMap);
+  const rawIssueScores = readTensorData(outputMap.issue_probs, 'issue_probs', ISSUE_LABELS.length);
+  const rawSourceScores = readTensorData(outputMap.source_probs, 'source_probs', SOURCE_LABELS.length);
 
   const issueScores = Object.fromEntries(
     ISSUE_LABELS.map((label, index) => [label, clamp(rawIssueScores[index] ?? 0, 0, 1)])
@@ -158,9 +154,8 @@ function parseModelOutputs(
   return {
     issueScores,
     sourceScores,
-    legacyEqFrequencyNormalized: readOptionalScalar(outputMap.eq_freq),
-    legacyEqGainDb: readOptionalScalar(outputMap.eq_gain_db),
-    usesLegacyOutputs
+    modelEqFrequencyNormalized: clamp(readScalar(outputMap.eq_freq, 'eq_freq'), 0, 1),
+    modelEqGainDb: clamp(readScalar(outputMap.eq_gain_db, 'eq_gain_db'), -6, 6)
   };
 }
 
@@ -201,13 +196,13 @@ function buildDetectedSources(sourceScores: Record<SourceLabel, number>) {
 function buildAnalysisResult({
   mlOutput,
   detectedSources,
-  legacyEqFrequencyNormalized,
-  legacyEqGainDb
+  modelEqFrequencyNormalized,
+  modelEqGainDb
 }: {
   mlOutput: ReturnType<typeof buildMlInferenceOutput>;
   detectedSources: DetectedAudioSource[];
-  legacyEqFrequencyNormalized: number | null;
-  legacyEqGainDb: number | null;
+  modelEqFrequencyNormalized: number;
+  modelEqGainDb: number;
 }): AnalysisResult {
   const issueProblems = ISSUE_LABELS
     .filter((label) => (mlOutput.issues[label] ?? 0) >= ISSUE_DEFAULT_THRESHOLDS[label])
@@ -216,9 +211,9 @@ function buildAnalysisResult({
       label,
       score: mlOutput.issues[label] ?? 0,
       detectedSources,
-      useLegacyEq: index === 0,
-      legacyEqFrequencyNormalized,
-      legacyEqGainDb
+      useModelEq: index === 0,
+      modelEqFrequencyNormalized,
+      modelEqGainDb
     }));
   const derivedProblems = Object.entries(mlOutput.derived_diagnoses)
     .map(([label, diagnosis]) => buildDerivedProblem(label as ProblemType, diagnosis!))
@@ -244,23 +239,23 @@ function buildIssueProblem({
   label,
   score,
   detectedSources,
-  useLegacyEq,
-  legacyEqFrequencyNormalized,
-  legacyEqGainDb
+  useModelEq,
+  modelEqFrequencyNormalized,
+  modelEqGainDb
 }: {
   label: TrainableIssueLabel;
   score: number;
   detectedSources: DetectedAudioSource[];
-  useLegacyEq: boolean;
-  legacyEqFrequencyNormalized: number | null;
-  legacyEqGainDb: number | null;
+  useModelEq: boolean;
+  modelEqFrequencyNormalized: number;
+  modelEqGainDb: number;
 }): DiagnosticProblem {
   const profile = ISSUE_PROFILES[label];
-  const frequencyHz = useLegacyEq && legacyEqFrequencyNormalized !== null
-    ? normalizedToFrequency(legacyEqFrequencyNormalized)
+  const frequencyHz = useModelEq
+    ? normalizedToFrequency(modelEqFrequencyNormalized)
     : profile.fallbackEq.frequencyHz;
-  const gainDb = useLegacyEq && legacyEqGainDb !== null
-    ? legacyEqGainDb
+  const gainDb = useModelEq
+    ? modelEqGainDb
     : profile.fallbackEq.gainDb;
   const recommendation = formatRecommendation(frequencyHz, gainDb, profile.fallbackEq.reason);
   const sources = detectedSources.length > 0 ? detectedSources.map((entry) => entry.source) : ['overall'];
@@ -312,32 +307,34 @@ function formatRecommendation(centerFrequencyHz: number, gainDb: number, reason:
   };
 }
 
-function readTensorData(value: unknown, outputName: string) {
+function readTensorData(value: unknown, outputName: string, expectedLength?: number) {
   if (!value || typeof value !== 'object' || !('data' in value)) {
     throw new Error(`Missing tensor output: ${outputName}`);
   }
 
   const data = (value as { data: ArrayLike<number> }).data;
-  return Array.from(data, (entry) => Number(entry));
-}
+  const values = Array.from(data, (entry) => Number(entry));
 
-function readOptionalTensorData(value: unknown, expectedLength: number) {
-  if (!value || typeof value !== 'object' || !('data' in value)) {
-    return Array.from({ length: expectedLength }, () => 0);
+  if (expectedLength !== undefined && values.length !== expectedLength) {
+    throw new Error(`Unexpected tensor length for ${outputName}: expected ${expectedLength}, received ${values.length}`);
   }
 
-  const data = (value as { data: ArrayLike<number> }).data;
-  return Array.from(data, (entry) => Number(entry));
+  return values;
 }
 
-function readOptionalScalar(value: unknown) {
+function readScalar(value: unknown, outputName: string) {
   if (!value || typeof value !== 'object' || !('data' in value)) {
-    return null;
+    throw new Error(`Missing scalar output: ${outputName}`);
   }
 
   const data = (value as { data: ArrayLike<number> }).data;
   const scalar = Array.from(data, (entry) => Number(entry))[0];
-  return Number.isFinite(scalar) ? scalar : null;
+
+  if (!Number.isFinite(scalar)) {
+    throw new Error(`Non-finite scalar output: ${outputName}`);
+  }
+
+  return scalar;
 }
 
 function normalizedToFrequency(value: number) {
@@ -372,10 +369,9 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function logMlInference(output: AnalysisResult['ml_output'], usesLegacyOutputs: boolean) {
+function logMlInference(output: AnalysisResult['ml_output']) {
   console.info('[audio-ml]', {
     schema_version: output?.schema_version ?? ML_SCHEMA_VERSION,
-    usesLegacyOutputs,
     issues: output?.issues,
     sources: output?.sources,
     derived_diagnoses: output?.derived_diagnoses

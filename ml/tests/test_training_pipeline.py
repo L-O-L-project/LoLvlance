@@ -73,9 +73,11 @@ class TrainingPipelineTest(unittest.TestCase):
             export_to_onnx(export_args)
 
             session = ort.InferenceSession(onnx_path.as_posix(), providers=["CPUExecutionProvider"])
-            issue_probs, source_probs = session.run(None, {"log_mel_spectrogram": sample})
+            issue_probs, source_probs, eq_freq, eq_gain_db = session.run(None, {"log_mel_spectrogram": sample})
             self.assertEqual(issue_probs.shape[1], 9)
             self.assertEqual(source_probs.shape[1], 5)
+            self.assertEqual(eq_freq.shape[1], 1)
+            self.assertEqual(eq_gain_db.shape[1], 1)
 
 
 def create_fake_public_datasets(root: Path) -> dict[str, Path]:

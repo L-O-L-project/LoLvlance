@@ -16,19 +16,23 @@ except ImportError:  # pragma: no cover
 try:
     from .label_schema import get_label_schema
     from .model import LightweightAudioAnalysisNet, ModelConfig
+    from .onnx_schema_adapter import HierarchicalEqProjection
 except ImportError:
     from label_schema import get_label_schema
     from model import LightweightAudioAnalysisNet, ModelConfig
+    from onnx_schema_adapter import HierarchicalEqProjection
 
 
 class OnnxExportWrapper(torch.nn.Module):
     def __init__(self, model: LightweightAudioAnalysisNet) -> None:
         super().__init__()
         self.model = model
+        self.eq_projection = HierarchicalEqProjection()
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         outputs = self.model(x)
-        return outputs["issue_probs"], outputs["source_probs"]
+        eq_freq, eq_gain_db = self.eq_projection(outputs["issue_probs"], outputs["source_probs"])
+        return outputs["issue_probs"], outputs["source_probs"], eq_freq, eq_gain_db
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,11 +81,13 @@ def export_to_onnx(args: argparse.Namespace) -> Path:
         opset_version=args.opset,
         dynamo=False,
         input_names=["log_mel_spectrogram"],
-        output_names=["issue_probs", "source_probs"],
+        output_names=["issue_probs", "source_probs", "eq_freq", "eq_gain_db"],
         dynamic_axes={
             "log_mel_spectrogram": {0: "batch_size", 1: "time_steps"},
             "issue_probs": {0: "batch_size"},
             "source_probs": {0: "batch_size"},
+            "eq_freq": {0: "batch_size"},
+            "eq_gain_db": {0: "batch_size"},
         },
     )
 
@@ -148,18 +154,28 @@ def verify_export(
         raise RuntimeError("onnxruntime is required for --verify but is not installed.")
 
     session = ort.InferenceSession(onnx_path.as_posix(), providers=["CPUExecutionProvider"])
-    issue_probs, source_probs = session.run(None, {"log_mel_spectrogram": example_input.numpy()})
+    issue_probs, source_probs, eq_freq, eq_gain_db = session.run(None, {"log_mel_spectrogram": example_input.numpy()})
 
     if issue_probs.shape[1] != 9:
         raise RuntimeError(f"Expected issue_probs shape (batch, 9), received {issue_probs.shape}.")
     if source_probs.shape[1] != 5:
         raise RuntimeError(f"Expected source_probs shape (batch, 5), received {source_probs.shape}.")
+    if eq_freq.shape[1] != 1:
+        raise RuntimeError(f"Expected eq_freq shape (batch, 1), received {eq_freq.shape}.")
+    if eq_gain_db.shape[1] != 1:
+        raise RuntimeError(f"Expected eq_gain_db shape (batch, 1), received {eq_gain_db.shape}.")
+    if not np.isfinite(eq_freq).all():
+        raise RuntimeError("eq_freq contains non-finite values.")
+    if not np.isfinite(eq_gain_db).all():
+        raise RuntimeError("eq_gain_db contains non-finite values.")
 
     with torch.no_grad():
-        reference_issue_probs, reference_source_probs = export_model(example_input)
+        reference_issue_probs, reference_source_probs, reference_eq_freq, reference_eq_gain_db = export_model(example_input)
 
     np.testing.assert_allclose(issue_probs, reference_issue_probs.cpu().numpy(), rtol=1e-3, atol=1e-4)
     np.testing.assert_allclose(source_probs, reference_source_probs.cpu().numpy(), rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(eq_freq, reference_eq_freq.cpu().numpy(), rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(eq_gain_db, reference_eq_gain_db.cpu().numpy(), rtol=1e-3, atol=1e-4)
 
 
 def main() -> None:
