@@ -20,6 +20,8 @@ import {
   SOURCE_DEFAULT_THRESHOLDS,
   SOURCE_LABELS
 } from './mlSchema';
+import ortWasmJsepModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
+import ortWasmJsepBinaryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
 
 const MODEL_MEL_BIN_COUNT = 64;
 const MODEL_SILENCE_RMS_THRESHOLD = 0.012;
@@ -91,6 +93,7 @@ export async function analyzeWithMlInference(
       log_mel_spectrogram: new ort.Tensor('float32', features.logMelSpectrogram, [1, timeSteps, melBins])
     });
     const parsedOutputs = parseModelOutputs(outputs);
+    logRawModelOutputs(parsedOutputs);
     const mlOutput = buildMlInferenceOutput(parsedOutputs.issueScores, parsedOutputs.sourceScores);
     const detectedSources = buildDetectedSources(parsedOutputs.sourceScores);
     const result = buildAnalysisResult({
@@ -110,7 +113,14 @@ export async function analyzeWithMlInference(
 
 async function getOrtModule() {
   if (!ortModulePromise) {
-    ortModulePromise = import('onnxruntime-web');
+    ortModulePromise = import('onnxruntime-web').then((ort) => {
+      ort.env.wasm.numThreads = 1;
+      ort.env.wasm.wasmPaths = {
+        mjs: ortWasmJsepModuleUrl,
+        wasm: ortWasmJsepBinaryUrl
+      };
+      return ort;
+    });
   }
 
   return ortModulePromise;
@@ -375,5 +385,19 @@ function logMlInference(output: AnalysisResult['ml_output']) {
     issues: output?.issues,
     sources: output?.sources,
     derived_diagnoses: output?.derived_diagnoses
+  });
+}
+
+function logRawModelOutputs({
+  issueScores,
+  sourceScores,
+  modelEqFrequencyNormalized,
+  modelEqGainDb
+}: ParsedModelOutputs) {
+  console.info('[audio-ml:raw]', {
+    issue_probs: ISSUE_LABELS.map((label) => Number(issueScores[label].toFixed(4))),
+    source_probs: SOURCE_LABELS.map((label) => Number(sourceScores[label].toFixed(4))),
+    eq_freq: Number(modelEqFrequencyNormalized.toFixed(4)),
+    eq_gain_db: Number(modelEqGainDb.toFixed(4))
   });
 }
