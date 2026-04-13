@@ -1,444 +1,552 @@
-# HANDOVER
+# LoLvlance Handover
 
-## 한 줄 상태
+This document is the technical handover for the current LoLvlance codebase.
 
-현재 LoLvlance는 "브라우저 실시간 오디오 분석 UI + local stem separation fallback 구조 + hierarchical multi-head ML 학습/ONNX export 파이프라인"까지 연결된 상태입니다. 이전 flat 3-label prototype 문서는 더 이상 기준이 아니며, 현재 authoritative ML schema는 `2.0.0` 입니다.
+The short version is:
 
-## 이번 기준선에서 가장 중요한 변화
+- the browser ML path is working end to end
+- the ONNX contract is aligned between Python and frontend
+- the current checkpoint is synthetic and only suitable for pipeline validation
+- EQ is still deterministic and rule-derived
 
-이전 문서와 비교해 달라진 핵심은 아래 네 가지입니다.
+Korean version: `HANDOVER.ko.md`
 
-1. training pipeline이 실제로 존재합니다.
-2. 모델은 더 이상 3-output flat classifier가 아닙니다.
-3. source-specific diagnosis는 direct train target이 아니라 post-processing derived output입니다.
-4. inference contract가 `issue_probs` + `source_probs` 구조로 확장되었습니다.
+## 1. What Has Been Completed
 
-즉, 지금부터 이 프로젝트를 이어받는 사람은 "브라우저 추론만 있는 데모"가 아니라 "재학습 가능한 Python ML 시스템 + 브라우저 추론 제품"으로 이해하면 됩니다.
+### ML and Export Pipeline
 
-## 현재 실제로 동작하는 것
+- A shared CNN encoder with two learned heads is implemented in `ml/model.py`.
+- The training loop in `ml/train.py` supports:
+  - manifest creation
+  - weak issue/source targets
+  - masked multi-label training
+  - threshold tuning
+  - checkpoint export
+- ONNX export is implemented in `ml/export_to_onnx.py`.
+- The ONNX export returns the stable browser schema:
+  - `issue_probs`
+  - `source_probs`
+  - `eq_freq`
+  - `eq_gain_db`
+- `onnxruntime` verification is implemented during export.
 
-### 브라우저 런타임
+### Frontend Integration
 
-- 마이크 권한 요청 및 상태 표시
-- native sample rate 캡처
-- 16kHz 분석 버퍼 유지
-- 약 3초 rolling buffer 유지
-- log-mel spectrogram / RMS feature extraction
-- ONNX Runtime Web 기반 경량 ML 추론
-- rule-based issue fallback
-- local stem separation sidecar 연동
-- MediaPipe YAMNet fallback source tagging
-- source-aware EQ recommendation 생성
-- 문제 카드 / source 카드 / stem metric / EQ UI 렌더링
+- The frontend consumes the new schema directly in `src/app/audio/mlInference.ts`.
+- Legacy output parsing for `problem_probs` and `instrument_probs` has been removed from the frontend path.
+- Browser inference is running through `onnxruntime-web`.
+- Vite-specific WASM asset resolution is configured explicitly in `mlInference.ts`. This is required for the current setup.
+- Browser ML failure still falls back cleanly to `ruleBasedAnalysis.ts`.
 
-### Python / ML
+### Browser Runtime Pipeline
 
-- public dataset 기반 manifest 생성
-- weak hierarchical label 생성
-- masked multi-head training
-- per-label metric 계산
-- threshold tuning
-- checkpoint 저장
-- ONNX export
-- `onnxruntime` 검증
-- post-processing derived diagnosis 로직
+- Microphone capture and rolling buffers are implemented in `src/app/hooks/useMonitoring.ts`.
+- Feature extraction is implemented in `src/app/audio/featureExtraction.ts`.
+- Derived diagnoses are implemented in `src/app/audio/diagnosisPostProcessing.ts`.
+- Source-aware EQ recommendations are implemented in `src/app/audio/sourceAwareEq.ts`.
+- Optional local stem separation and fallback source tagging are integrated into the runtime pipeline.
 
-### 검증
+### Synthetic Training Validation
 
-- Python unit tests 통과
-- toy public dataset 기반 end-to-end training test 통과
-- frontend build 통과
+- A synthetic fallback dataset generator exists at `ml/generate_synthetic_public_datasets.py`.
+- The current synthetic manifest exists at `ml/artifacts/public_dataset_manifest.jsonl`.
+- The current training run produced these artifacts in `ml/checkpoints/`:
+  - `model.pt`
+  - `best_sound_issue_model.pt`
+  - `last_sound_issue_model.pt`
+  - `config.json`
+  - `thresholds.json`
+  - `label_thresholds.json`
+  - `training_history.json`
+  - `lightweight_audio_model.onnx`
+  - `lightweight_audio_model.metadata.json`
+- The current browser model was updated from the exported checkpoint:
+  - `ml/checkpoints/lightweight_audio_model.onnx`
+  - `public/models/lightweight_audio_model.onnx`
 
-## 현재 아키텍처를 한 문장으로 설명하면
+## 2. What Is NOT Done
 
-공용 데이터셋으로 weak hierarchical supervision을 만들고, shared encoder 위에 issue head와 source head를 학습한 뒤, 브라우저에서는 ONNX output을 받아 source-specific diagnosis를 파생하고 stem/rule 결과와 함께 UI에 보여주는 구조입니다.
+- No real public datasets are installed locally in this workspace.
+- No real-dataset checkpoint has been trained yet.
+- No production-quality accuracy claim is justified.
+- No data collection or human review loop exists.
+- No learned EQ head exists.
+- No formal latency benchmark across device classes exists.
+- No automated browser regression suite is committed for mic-driven end-to-end validation.
 
-## 절대 헷갈리면 안 되는 taxonomy
+Treat the current checkpoint as an integration artifact, not a production model.
 
-### Head A: 직접 학습
+## 3. Critical Files
 
-- `muddy`
-- `harsh`
-- `buried`
-- `boomy`
-- `thin`
-- `boxy`
-- `nasal`
-- `sibilant`
-- `dull`
+- `ml/model.py`
+  Trainable model definition. Shared CNN encoder plus `issue_head` and `source_head`.
+- `ml/train.py`
+  End-to-end training loop, checkpoint writing, threshold tuning, and optional ONNX export trigger.
+- `ml/export_to_onnx.py`
+  ONNX export wrapper. Adds deterministic EQ outputs on top of the two-head model.
+- `ml/onnx_schema_adapter.py`
+  Deterministic EQ projection and legacy-adaptation utilities.
+- `ml/label_schema.py`
+  Authoritative schema source for labels, thresholds, fallback EQ mappings, and schema versioning.
+- `ml/dataset.py`
+  Public-style dataset scanning, weak label generation, manifest writing, and runtime dataset loading.
+- `ml/preprocessing.py`
+  Audio loading, resampling, log-mel extraction, and spectral feature computation used by training.
+- `ml/metrics.py`
+  Multilabel evaluation and threshold tuning.
+- `src/app/hooks/useMonitoring.ts`
+  Main browser runtime orchestrator. Start here if you need to understand the end-to-end UI pipeline.
+- `src/app/audio/mlInference.ts`
+  Browser ONNX session creation, schema parsing, inference error handling, and temporary raw tensor logging.
+- `src/app/audio/mlSchema.ts`
+  Frontend mirror of the Python label schema. Keep this aligned with `ml/label_schema.py`.
+- `src/app/audio/diagnosisPostProcessing.ts`
+  Derived diagnosis logic such as `vocal_buried` and `guitar_harsh`.
+- `src/app/audio/sourceAwareEq.ts`
+  User-facing source-aware EQ recommendation logic.
+- `src/app/audio/ruleBasedAnalysis.ts`
+  Fallback issue detector if browser ML is unavailable.
 
-### Head B: 별도 학습
+## 4. ML Pipeline Details
 
-- `vocal`
-- `guitar`
-- `bass`
-- `drums`
-- `keys`
+### Input Format
 
-### v1에서 직접 학습하지 않음
+The trainable model consumes:
 
-- `vocal_buried`
-- `guitar_harsh`
-- `bass_muddy`
-- `drums_overpower`
-- `keys_masking`
+- input name: `log_mel_spectrogram`
+- dtype: `float32`
+- shape: `(batch, time_steps, 64)`
 
-### product-layer but not train head
+The preprocessing contract in `ml/preprocessing.py` is:
 
-- `imbalance`
+- sample rate: `16_000`
+- clip duration: `3.0` seconds
+- window size: `25 ms`
+- hop size: `10 ms`
+- FFT size: `512`
+- mel bins: `64`
 
-`imbalance` 는 현재 rule/product 계층에 남아 있고, trainable issue head에는 포함되지 않습니다.
+For a typical 3-second clip, the time dimension is about `298` frames.
 
-## authoritative schema 위치
+### Dataset and Manifest
 
-### Python source of truth
+`ml/dataset.py` is designed around four public-style dataset roots:
 
-- [ml/label_schema.py](/Users/kimhajun/Downloads/LoLvlance/ml/label_schema.py:1)
-
-여기서 관리하는 것:
-
-- `SCHEMA_VERSION = "2.0.0"`
-- issue labels
-- primary UI issues
-- source labels
-- derived diagnosis labels
-- cause metadata labels
-- default thresholds
-- fallback EQ
-- issue-to-cause mapping
-- issue-to-source-affinity mapping
-
-### frontend mirror
-
-- [src/app/audio/mlSchema.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/mlSchema.ts:1)
-
-현재 프론트는 ONNX companion metadata JSON을 런타임에 읽지 않고, 이 TS mirror를 사용합니다. Python schema를 바꾸면 이 파일도 같이 맞춰야 합니다.
-
-## 현재 runtime flow
-
-핵심 entrypoint는 [src/app/hooks/useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts:1) 입니다.
-
-실행 순서:
-
-1. UI에서 분석 시작
-2. 마이크 입력 확보
-3. native sample rate 원본 버퍼와 16kHz 분석 버퍼를 동시에 유지
-4. [src/app/audio/featureExtraction.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/featureExtraction.ts:1) 에서 log-mel / RMS 계산
-5. [src/app/audio/mlInference.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/mlInference.ts:1) 로 ONNX 추론
-6. `issue_probs` / `source_probs` 를 `ml_output` 으로 구조화
-7. [src/app/audio/diagnosisPostProcessing.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/diagnosisPostProcessing.ts:1) 에서 파생 진단 생성
-8. local stem service가 켜져 있으면 [src/app/audio/stemSeparationClient.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/stemSeparationClient.ts:1) 결과 병합
-9. stem 결과가 부족하면 [src/app/audio/openSourceAudioTagging.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/openSourceAudioTagging.ts:1) fallback 사용
-10. [src/app/audio/sourceAwareEq.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/sourceAwareEq.ts:1) 에서 source-aware EQ 생성
-11. [src/app/components/ResultCards.tsx](/Users/kimhajun/Downloads/LoLvlance/src/app/components/ResultCards.tsx:1) 에서 사용자에게 표시
-
-## 현재 training flow
-
-핵심 entrypoint는 [ml/train.py](/Users/kimhajun/Downloads/LoLvlance/ml/train.py:1) 입니다.
-
-실행 순서:
-
-1. dataset root 수신
-2. manifest 빌드 또는 기존 manifest 로드
-3. split별 dataset/dataloader 구성
-4. shared encoder + multi-head model 생성
-5. issue/source pos weight 계산
-6. masked BCEWithLogitsLoss로 epoch 학습
-7. validation output 수집
-8. per-label metric 계산
-9. best epoch 선택
-10. validation set 기반 threshold tuning
-11. checkpoint / threshold JSON / history 저장
-12. 필요 시 ONNX export
-
-## dataset / label generation 현실
-
-핵심 파일은 [ml/dataset.py](/Users/kimhajun/Downloads/LoLvlance/ml/dataset.py:1) 입니다.
-
-현재 지원 public datasets:
-
-- OpenMIC-2018
-- Slakh2100
+- OpenMIC
+- Slakh
 - MUSAN
 - FSD50K
 
-manifest 설계 원칙:
+The manifest format stores:
 
-- 무조건 flat label vector 하나로 만들지 않음
-- `issue_targets` 와 `source_targets` 를 분리
-- label quality를 explicit하게 기록
-- unavailable source supervision은 `mask = 0`
-- `track_group_id` 기준으로 leakage를 줄이는 split 유지
+- audio path
+- clip start and duration
+- split
+- issue targets
+- source targets
+- target masks
+- label quality metadata
+- feature-derived metadata
+- `track_group_id` for split hygiene
 
-manifest entry에서 특히 봐야 할 필드:
+Source supervision is intentionally mask-aware. If a source label is unavailable for a clip, the mask is `0` and the loss does not force a positive or negative target for that label.
 
-- `schema_version`
-- `track_group_id`
-- `issue_targets.values`
-- `issue_targets.mask`
-- `issue_targets.quality`
-- `source_targets.values`
-- `source_targets.mask`
-- `source_targets.quality`
-- `metadata.issue_reasons`
-- `metadata.source_evidence`
-- `metadata.source_support`
+### Model Structure
 
-중요한 현실적 제한:
+The current model in `ml/model.py` is a lightweight CNN:
 
-- source label은 일부 샘플에서만 충분히 지원됩니다.
-- 따라서 source supervision coverage는 sparse할 수 있습니다.
-- 이건 버그가 아니라 설계 의도입니다.
+- stacked convolutional encoder blocks
+- mean pooling + max pooling
+- concatenated embedding of size `192`
+- `issue_head` output size `9`
+- `source_head` output size `5`
 
-## 모델 계약
+Trainable issue labels:
 
-핵심 파일:
+```text
+[muddy, harsh, buried, boomy, thin, boxy, nasal, sibilant, dull]
+```
 
-- [ml/model.py](/Users/kimhajun/Downloads/LoLvlance/ml/model.py:1)
-- [ml/lightweight_audio_model.py](/Users/kimhajun/Downloads/LoLvlance/ml/lightweight_audio_model.py:1)
+Trainable source labels:
 
-현재 모델 계약:
+```text
+[vocal, guitar, bass, drums, keys]
+```
 
-- 입력: `log_mel_spectrogram`
-- shape: `(batch, time_steps, 64)`
-- shared embedding size: `192`
-- issue output count: `9`
-- source output count: `5`
+Derived diagnosis labels generated in post-processing:
 
-forward output:
+```text
+[vocal_buried, guitar_harsh, bass_muddy, drums_overpower, keys_masking]
+```
 
-- `issue_logits`
+Schema source-of-truth:
+
+- Python: `ml/label_schema.py`
+- Frontend mirror: `src/app/audio/mlSchema.ts`
+
+There is no learned EQ head in the current architecture.
+
+### Training Loop
+
+`ml/train.py` currently does the following:
+
+1. Resolves dataset roots and builds or loads the manifest.
+2. Creates train and validation datasets.
+3. Extracts log-mel features dynamically in `__getitem__`.
+4. Computes class-wise positive weights from the training split.
+5. Trains with masked BCE losses for:
+   - issue head
+   - source head
+6. Tunes thresholds on the best validation epoch.
+7. Writes checkpoints, threshold JSON, config JSON, and training history.
+8. Optionally exports ONNX.
+
+Current training defaults in code:
+
+- optimizer: `AdamW`
+- learning rate: `1e-3`
+- batch size: `16`
+- weight decay: `1e-4`
+
+### Current Synthetic Training Run
+
+The current checked-in checkpoint was trained on synthetic data with:
+
+- total clips: `44`
+- train split: `22`
+- val split: `22`
+- best epoch: `10`
+- train loss: `1.4123 -> 0.5785`
+- val loss: `1.3208 -> 1.1534`
+- selection score: `0.7264`
+
+Important caveat:
+
+- `keys` has support in all `44` synthetic samples, so the current source model is biased.
+- That bias is visible in browser tests where real voice and music do not separate cleanly by source.
+
+## 5. ONNX Integration
+
+### Export Contract
+
+`ml/export_to_onnx.py` wraps the trainable model in `OnnxExportWrapper`.
+
+That wrapper returns:
+
+```text
+(issue_probs, source_probs, eq_freq, eq_gain_db)
+```
+
+Current export properties:
+
+- opset: `18`
+- dynamic axes:
+  - batch
+  - time steps
+- input name:
+  - `log_mel_spectrogram`
+- output names:
+  - `issue_probs`
+  - `source_probs`
+  - `eq_freq`
+  - `eq_gain_db`
+
+### Browser Consumption
+
+`src/app/audio/mlInference.ts` expects only the new schema. It reads:
+
 - `issue_probs`
-- `source_logits`
 - `source_probs`
-- `embedding`
-- `problem_probs`
+- `eq_freq`
+- `eq_gain_db`
 
-`problem_probs` 는 legacy alias라서 프론트/테스트 일부가 기존 이름을 계속 써도 동작합니다.
+If any required tensor is missing, parsing throws and the system falls back to the existing rule-based engine.
 
-## ONNX 계약
+### Vite and ONNX Runtime Web
 
-핵심 파일:
+This point is critical.
 
-- [ml/export_to_onnx.py](/Users/kimhajun/Downloads/LoLvlance/ml/export_to_onnx.py:1)
+`onnxruntime-web` must be given explicit WASM asset URLs under Vite. Without that, the browser can request the wrong resource and ORT initialization fails before inference starts.
 
-현재 export output names:
+The current code handles this by importing:
 
-- `issue_probs`
-- `source_probs`
+- `onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url`
+- `onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url`
 
-입력:
+and then setting:
 
-- `log_mel_spectrogram`
+- `ort.env.wasm.numThreads = 1`
+- `ort.env.wasm.wasmPaths = { mjs, wasm }`
 
-shape:
+If browser ML suddenly starts falling back everywhere, check this first.
 
-- input: `(batch, time_steps, 64)`
-- output issue: `(batch, 9)`
-- output source: `(batch, 5)`
+### Active Model Paths
 
-export 시 함께 생성되는 것:
+- Python export artifact:
+  - `ml/checkpoints/lightweight_audio_model.onnx`
+- Active browser artifact:
+  - `public/models/lightweight_audio_model.onnx`
 
-- `*.metadata.json`
+`public/models/lightweight_audio_model.onnx.data` is still in the repo from an older external-data export. The current browser model is the standalone `.onnx` file.
 
-여기에는 schema version, labels, thresholds, fallback EQ mapping 등이 들어갑니다.
+### Metadata Companion File
 
-중요:
+`ml/export_to_onnx.py` also writes a companion metadata file:
 
-- 현재 `public/models/lightweight_audio_model.onnx` 는 external-data ONNX 형식이라 `.onnx.data` 파일도 같이 필요합니다.
-- 예전 문서의 "onnx.data만 있으면 된다" 식 설명은 잘못입니다.
-- 올바른 설명은 "현재 커밋된 artifact는 `.onnx` 와 `.onnx.data` 를 함께 유지해야 하고, 새 export는 metadata JSON도 추가로 생성한다" 입니다.
+- `ml/checkpoints/lightweight_audio_model.metadata.json`
 
-## 프론트 inference contract
+This includes:
 
-[src/app/audio/mlInference.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/mlInference.ts:1) 가 실제 브라우저 추론 계약을 구현합니다.
+- schema version
+- issue labels
+- primary issue labels
+- source labels
+- derived diagnosis labels
+- thresholds
+- issue-to-cause mappings
+- issue-to-source-affinity mappings
+- fallback EQ mappings
 
-중요 포인트:
+## 6. Rule-Based EQ System
 
-- 새 ONNX outputs `issue_probs`, `source_probs` 우선 사용
-- legacy outputs `problem_probs`, `instrument_probs` fallback 허용
-- silence RMS 이하에서는 빈 결과 반환
-- `AnalysisResult.issues` 는 여전히 `muddy / harsh / buried` 만 primary UI issue로 노출
-- 전체 hierarchical 결과는 `AnalysisResult.ml_output` 으로 따로 보존
+EQ is not currently learned.
 
-즉, 기존 UI와 호환성을 유지하면서 더 풍부한 구조를 추가한 상태입니다.
+There are two separate EQ layers in the project:
 
-## 파생 진단 규칙
+### ONNX-Level Deterministic EQ Projection
 
-Python:
+Defined in `ml/onnx_schema_adapter.py` as `HierarchicalEqProjection`.
 
-- [ml/postprocessing.py](/Users/kimhajun/Downloads/LoLvlance/ml/postprocessing.py:1)
+It takes:
 
-Frontend:
+- issue probabilities
+- source probabilities
 
-- [src/app/audio/diagnosisPostProcessing.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/diagnosisPostProcessing.ts:1)
+and produces:
 
-현재 구현된 규칙:
+- `eq_freq`
+- `eq_gain_db`
 
-- `vocal_buried = buried + vocal + presence 부족 보너스`
-- `guitar_harsh = harsh + guitar + sibilant/presence peak 보너스`
-- `bass_muddy = muddy + bass + boomy 보너스`
-- `drums_overpower = harsh|boomy + drums + thin 보너스`
-- `keys_masking = buried|boxy + keys + nasal 보너스`
+This projection uses:
 
-이 값들은 direct training target이 아닙니다. derived thresholds를 넘고 이유가 2개 이상 잡힐 때만 결과에 포함됩니다.
+- per-issue fallback EQ mappings
+- issue/source pair overrides
+- weighted blending across active issue and source probabilities
 
-## 가장 먼저 읽을 파일 순서
+This is how the ONNX model can expose the full four-output browser schema while the trainable network remains two-head only.
 
-새 엔지니어가 빨리 적응하려면 아래 순서가 가장 효율적입니다.
+### Frontend Source-Aware EQ Recommendations
 
-1. [README.md](/Users/kimhajun/Downloads/LoLvlance/README.md:1)
-2. [src/app/hooks/useMonitoring.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/hooks/useMonitoring.ts:1)
-3. [src/app/audio/mlInference.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/audio/mlInference.ts:1)
-4. [src/app/types.ts](/Users/kimhajun/Downloads/LoLvlance/src/app/types.ts:1)
-5. [ml/label_schema.py](/Users/kimhajun/Downloads/LoLvlance/ml/label_schema.py:1)
-6. [ml/dataset.py](/Users/kimhajun/Downloads/LoLvlance/ml/dataset.py:1)
-7. [ml/model.py](/Users/kimhajun/Downloads/LoLvlance/ml/model.py:1)
-8. [ml/train.py](/Users/kimhajun/Downloads/LoLvlance/ml/train.py:1)
-9. [ml/export_to_onnx.py](/Users/kimhajun/Downloads/LoLvlance/ml/export_to_onnx.py:1)
-10. [ml/postprocessing.py](/Users/kimhajun/Downloads/LoLvlance/ml/postprocessing.py:1)
+Defined in `src/app/audio/sourceAwareEq.ts`.
 
-## 자주 쓰는 실행 명령
+This layer builds human-readable recommendations using:
 
-### frontend
+- detected sources
+- issue labels
+- optional stem metrics
 
-```bash
-npm install
-npm run dev
+Examples:
+
+- cut vocal mud around `180-320Hz`
+- tame drum harshness around `4500-8000Hz`
+- add presence to buried vocals around `1500-3000Hz`
+
+### Fallback Rule Engine
+
+Defined in `src/app/audio/ruleBasedAnalysis.ts`.
+
+If browser ML fails entirely, the app can still:
+
+- detect basic issues like `muddy`, `harsh`, and `buried`
+- provide basic EQ suggestions
+
+## 7. How to Retrain the Model
+
+### Step 1: Create the Python Environment
+
+PowerShell example:
+
+```powershell
+python -m venv .venv-ml
+.\.venv-ml\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-ml\Scripts\python.exe -m pip install -r ml\requirements-test.txt
 ```
 
-### build
+### Step 2A: Train From Real Public Datasets
 
-```bash
-npm run build
+If you have the dataset roots locally, run:
+
+```powershell
+.\.venv-ml\Scripts\python.exe -m ml.train `
+  --openmic-root C:\path\to\openmic `
+  --slakh-root C:\path\to\slakh `
+  --musan-root C:\path\to\musan `
+  --fsd50k-root C:\path\to\fsd50k `
+  --manifest-path ml\artifacts\public_dataset_manifest.jsonl `
+  --rebuild-manifest `
+  --epochs 10 `
+  --batch-size 16 `
+  --learning-rate 1e-3 `
+  --checkpoint-dir ml\checkpoints `
+  --export-onnx `
+  --onnx-output ml\checkpoints\lightweight_audio_model.onnx
 ```
 
-### ML 테스트 환경
+### Step 2B: Synthetic Fallback Training
 
-```bash
-bash ml/setup_test_env.sh
+If real datasets are not available, rebuild the synthetic set:
+
+```powershell
+.\.venv-ml\Scripts\python.exe -m ml.generate_synthetic_public_datasets `
+  --output-root ml\artifacts\synthetic_public_datasets
 ```
 
-### ML 테스트
+Then train:
 
-```bash
-PYTHONPATH=. ./.venv-ml/bin/python -m unittest discover -s ml/tests -p 'test_*.py' -v
+```powershell
+.\.venv-ml\Scripts\python.exe -m ml.train `
+  --openmic-root ml\artifacts\synthetic_public_datasets\openmic `
+  --slakh-root ml\artifacts\synthetic_public_datasets\slakh `
+  --musan-root ml\artifacts\synthetic_public_datasets\musan `
+  --fsd50k-root ml\artifacts\synthetic_public_datasets\fsd50k `
+  --manifest-path ml\artifacts\public_dataset_manifest.jsonl `
+  --rebuild-manifest `
+  --epochs 10 `
+  --batch-size 16 `
+  --learning-rate 1e-3 `
+  --checkpoint-dir ml\checkpoints `
+  --export-onnx `
+  --onnx-output ml\checkpoints\lightweight_audio_model.onnx
 ```
 
-### stem service setup / run
+### Step 3: Standalone ONNX Export
 
-```bash
-bash ml/setup_stem_service.sh
-bash ml/run_stem_service.sh
-```
+If you already have a checkpoint and only want to export:
 
-### stem service health
-
-```bash
-curl http://127.0.0.1:8765/health
-```
-
-### training
-
-```bash
-python3 ml/train.py \
-  --openmic-root /path/to/openmic \
-  --slakh-root /path/to/slakh \
-  --musan-root /path/to/musan \
-  --fsd50k-root /path/to/fsd50k \
-  --rebuild-manifest \
-  --epochs 6 \
-  --batch-size 16 \
-  --checkpoint-dir ml/checkpoints
-```
-
-### training + ONNX export
-
-```bash
-python3 ml/train.py \
-  --openmic-root /path/to/openmic \
-  --slakh-root /path/to/slakh \
-  --musan-root /path/to/musan \
-  --fsd50k-root /path/to/fsd50k \
-  --rebuild-manifest \
-  --export-onnx \
-  --onnx-output ml/checkpoints/lightweight_audio_model.onnx
-```
-
-### standalone ONNX export
-
-```bash
-python3 ml/export_to_onnx.py \
-  --checkpoint ml/checkpoints/best_sound_issue_model.pt \
-  --output ml/checkpoints/lightweight_audio_model.onnx \
-  --time-steps 128 \
+```powershell
+.\.venv-ml\Scripts\python.exe -m ml.export_to_onnx `
+  --checkpoint ml\checkpoints\best_sound_issue_model.pt `
+  --output ml\checkpoints\lightweight_audio_model.onnx `
+  --time-steps 298 `
   --verify
 ```
 
-## 결과물 경로
+### Step 4: Replace the Browser Model
 
-학습 결과물 기본 경로:
+```powershell
+Copy-Item ml\checkpoints\lightweight_audio_model.onnx public\models\lightweight_audio_model.onnx -Force
+```
 
-- `ml/artifacts/public_dataset_manifest.jsonl`
-- `ml/checkpoints/best_sound_issue_model.pt`
-- `ml/checkpoints/last_sound_issue_model.pt`
-- `ml/checkpoints/label_thresholds.json`
-- `ml/checkpoints/training_history.json`
-- `ml/checkpoints/lightweight_audio_model.onnx`
-- `ml/checkpoints/lightweight_audio_model.metadata.json`
+### Step 5: Verify in the Browser
 
-브라우저 런타임 모델:
+```bash
+npm run dev
+```
 
-- [public/models/lightweight_audio_model.onnx](/Users/kimhajun/Downloads/LoLvlance/public/models/lightweight_audio_model.onnx:1)
-- [public/models/lightweight_audio_model.onnx.data](/Users/kimhajun/Downloads/LoLvlance/public/models/lightweight_audio_model.onnx.data:1)
-- [public/models/yamnet.tflite](/Users/kimhajun/Downloads/LoLvlance/public/models/yamnet.tflite:1)
+Then verify:
 
-## 디버깅 가이드
+- `[audio-ml]` logs `status: 'ready'`
+- raw outputs are finite and non-constant
+- no missing output-key errors appear
+- no `[audio-ml] Inference failed...` warnings appear during normal inference
 
-### 브라우저 로그 키
+## 8. Common Failure Points
 
-- `[audio-features]`
-- `[audio-ml]`
-- `[audio-rules]`
-- `[audio-stems]`
-- `[audio-tags]`
+### 1. Model Fails to Load in Browser
 
-### 해석 팁
+Symptoms:
 
-- `[audio-ml]` 에 schema/version/model readiness가 찍히는지 먼저 확인
-- `[audio-stems]` 가 없고 `[audio-tags]` 만 있으면 sidecar가 죽어 있거나 연결 실패
-- source-aware EQ가 비어 있으면 `detectedSources` 와 `stemMetrics` 를 먼저 확인
-- UI에는 문제가 없는데 derived diagnosis가 없으면 thresholds 때문에 걸러졌을 가능성이 큼
+- `[audio-ml] Model warm-up skipped`
+- ORT backend initialization errors
+- immediate rule-based fallback
 
-### training 쪽에서 먼저 볼 파일
+Checks:
 
-- threshold tuning 이상: [ml/metrics.py](/Users/kimhajun/Downloads/LoLvlance/ml/metrics.py:1)
-- source supervision coverage 부족: [ml/dataset.py](/Users/kimhajun/Downloads/LoLvlance/ml/dataset.py:1)
-- ONNX mismatch: [ml/export_to_onnx.py](/Users/kimhajun/Downloads/LoLvlance/ml/export_to_onnx.py:1)
+- confirm `public/models/lightweight_audio_model.onnx` exists
+- confirm `mlInference.ts` still sets `ort.env.wasm.wasmPaths`
+- confirm the model URL resolves under the current Vite base path
 
-## 현재 알려진 한계
+### 2. Missing ONNX Outputs
 
-1. issue labels는 여전히 weak labels 중심입니다.
-2. source labels는 dataset metadata/stem evidence 가용성에 따라 supervision coverage가 달라집니다.
-3. 파생 진단은 heuristic post-processing 입니다.
-4. 프론트는 metadata JSON을 artifact-driven으로 읽지 않습니다.
-5. `imbalance` 는 rule/product 레이어에 남아 있습니다.
-6. committed browser model artifact가 실제 운영용 품질을 보장하지는 않습니다.
+Symptoms:
 
-## 지금 시점의 우선순위
+- errors mentioning `Missing tensor output: issue_probs`
+- errors mentioning `Missing scalar output: eq_freq`
 
-가장 추천하는 다음 단계는 아래 순서입니다.
+Cause:
 
-1. reviewed labels를 일부라도 도입해 weak labels를 보정
-2. train/export된 metadata JSON을 프론트 런타임에서 직접 읽도록 개선
-3. public dataset source parsing을 더 정교화
-4. held-out test split을 별도로 만들어 정식 benchmark 분리
-5. derived diagnosis rule을 threshold calibration과 함께 재정리
+- exported model did not go through `OnnxExportWrapper`
+- output names were changed
+- wrong artifact was copied into `public/models/`
 
-## 실무적으로 꼭 기억할 점
+### 3. Constant or Meaningless Outputs
 
-- source-specific diagnosis를 primary classes로 다시 평탄화하지 말 것
-- Python schema와 TS schema mirror가 어긋나면 런타임 결과 해석이 틀어짐
-- 새로운 label을 추가할 때는 반드시 issue/source/derived 중 어느 계층인지 먼저 결정할 것
-- current frontend compatibility를 위해 `AnalysisResult.issues` 의 primary subset 동작을 함부로 깨지 말 것
-- checked-in browser model을 교체할 때는 `.onnx`, `.onnx.data`, 필요 시 metadata JSON까지 artifact set으로 관리할 것
+Symptoms:
+
+- `issue_probs` do not move between silence, voice, and music
+- `source_probs` collapse onto one source
+
+Checks:
+
+- confirm you are not in the silence gate path
+- inspect `[audio-ml:raw]` logs
+- remember the current checkpoint is synthetic and biased
+
+Relevant automated checks already exist in:
+
+- `ml/tests/test_export_to_onnx.py`
+- `ml/tests/test_training_pipeline.py`
+- `ml/tests/test_legacy_onnx_adapter.py`
+
+### 4. Silence Produces No Raw ML Output
+
+This is expected if RMS is below the silence threshold.
+
+Current browser silence gating in `mlInference.ts` short-circuits before ONNX inference when:
+
+- `features.rms < 0.012`
+
+### 5. Schema Drift Between Python and Frontend
+
+If you add or rename labels:
+
+- update `ml/label_schema.py`
+- update `src/app/audio/mlSchema.ts`
+- update any post-processing thresholds and mappings
+
+Do not change only one side.
+
+### 6. Confusing Stem-Service Fallback With ML Fallback
+
+The UI can show a stem-service fallback even when browser ML is healthy.
+
+Those are different paths:
+
+- ML fallback means ONNX failed and the app used `ruleBasedAnalysis.ts`.
+- Stem-service fallback means the separate local source-separation sidecar was unavailable, so the app used browser-side tagging instead.
+
+### 7. Microphone Permission Problems
+
+Checks:
+
+- browser permission state
+- device availability
+- secure context / local dev environment
+- whether `getUserMedia` is blocked by browser settings
+
+### 8. Stale Public Model After Retraining
+
+The training pipeline writes to `ml/checkpoints/`.
+The browser reads from `public/models/`.
+
+Retraining alone does not update the runtime model unless you copy the exported ONNX file into `public/models/`.
+
+## Recommended Next Work
+
+If a new engineer is taking over now, the highest-value next steps are:
+
+1. Replace synthetic training data with real public datasets.
+2. Build a proper evaluation report on real audio.
+3. Add a data collection and review loop.
+4. Decide whether EQ should remain deterministic or become a learned head later.
+5. Add automated browser regression coverage for schema, loading, and output variability.
