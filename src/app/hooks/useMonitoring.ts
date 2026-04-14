@@ -34,6 +34,8 @@ import {
   MONITORING_INFERENCE_STRIDE_MS,
   MONITORING_MIN_BUFFER_MS,
   MONITORING_WINDOW_SECONDS,
+  SLOW_SIGNAL_BUFFER_SECONDS,
+  SOURCE_SWITCH_SUSTAINED_FRAMES,
   isMonitoringStabilizationDebugEnabled
 } from '../config/monitoringStabilization';
 import {
@@ -436,6 +438,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       }
 
       const now = Date.now();
+      const debugEnabled = isMonitoringStabilizationDebugEnabled();
       const shouldCommitDisplay = lastDisplayCommitAtRef.current === null
         || (now - lastDisplayCommitAtRef.current) >= MONITORING_DISPLAY_COMMIT_MS;
       const {
@@ -446,12 +449,13 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         currentState: monitoringMlStateRef.current,
         rawResult: nextResult,
         now,
-        commitDisplayed: shouldCommitDisplay
+        commitDisplayed: shouldCommitDisplay,
+        captureDebugSnapshot: debugEnabled
       });
 
       monitoringMlStateRef.current = nextState;
 
-      if (debugSnapshot && isMonitoringStabilizationDebugEnabled()) {
+      if (debugSnapshot && debugEnabled) {
         console.debug('[audio-monitoring:stabilization]', debugSnapshot);
       }
 
@@ -749,6 +753,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       monitoringWindowSeconds: MONITORING_WINDOW_SECONDS,
       monitoringStrideMs: MONITORING_INFERENCE_STRIDE_MS,
       displayCommitMs: MONITORING_DISPLAY_COMMIT_MS,
+      slowBufferSeconds: SLOW_SIGNAL_BUFFER_SECONDS,
+      sourceSwitchSustainedFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
       stabilizationDebug: isMonitoringStabilizationDebugEnabled()
     });
 

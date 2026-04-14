@@ -152,12 +152,31 @@ export interface MlInferenceOutput {
   };
 }
 
+export type MonitoringIssueState = 'off' | 'transient' | 'persistent';
+
+export interface MonitoringInterpretation {
+  fastIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  slowIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  fastSourceProbs: Partial<Record<SourceLabel, number>>;
+  slowSourceProbs: Partial<Record<SourceLabel, number>>;
+  fastEqFreqHz: number | null;
+  slowEqFreqHz: number | null;
+  fastEqGainDb: number | null;
+  slowEqGainDb: number | null;
+  issueStates: Record<TrainableIssueLabel, MonitoringIssueState>;
+  transientIssues: TrainableIssueLabel[];
+  persistentIssues: TrainableIssueLabel[];
+  displayedSourceState: SourceLabel | null;
+  suddenEqShift: boolean;
+}
+
 export interface MonitoringIssueDecision {
   label: TrainableIssueLabel;
-  previousState: boolean;
-  nextState: boolean;
-  smoothedProbability: number;
-  reason: 'initial_on' | 'initial_off' | 'switch_on' | 'switch_off' | 'hold';
+  previousState: MonitoringIssueState;
+  nextState: MonitoringIssueState;
+  fastProbability: number;
+  slowProbability: number;
+  reason: 'persistent_on' | 'persistent_hold' | 'persistent_from_slow' | 'transient_on' | 'transient_hold' | 'off';
 }
 
 export interface MonitoringSourceDecision {
@@ -167,30 +186,49 @@ export interface MonitoringSourceDecision {
   previousProbability: number | null;
   candidateProbability: number | null;
   margin: number;
-  reason: 'initial' | 'retain' | 'switch' | 'empty';
+  sustainedFrames: number;
+  requiredFrames: number;
+  reason: 'initial' | 'retain' | 'switch' | 'pending' | 'empty';
 }
 
 export interface MonitoringEqDecision {
   previousValue: number | null;
-  smoothedValue: number | null;
+  fastValue: number | null;
+  slowValue: number | null;
   displayedValue: number | null;
   delta: number | null;
   threshold: number;
+  suddenShift: boolean;
   reason: 'initial' | 'updated' | 'suppressed' | 'missing';
+}
+
+export interface MonitoringHistoryFrameSnapshot {
+  timestamp: number;
+  fastIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  fastSourceProbs: Partial<Record<SourceLabel, number>>;
+  fastEqFreqHz: number | null;
+  fastEqGainDb: number | null;
 }
 
 export interface MonitoringStabilizationDebug {
   inferenceTimestamp: number;
   displayCommitted: boolean;
+  bufferSize: number;
+  bufferCapacity: number;
+  bufferFrames: MonitoringHistoryFrameSnapshot[];
   rawIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
   rawSourceProbs: Partial<Record<SourceLabel, number>>;
   rawEqFreqHz: number | null;
   rawEqGainDb: number | null;
-  smoothedIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
-  smoothedSourceProbs: Partial<Record<SourceLabel, number>>;
-  smoothedEqFreqHz: number | null;
-  smoothedEqGainDb: number | null;
-  displayedIssueState: Record<TrainableIssueLabel, boolean>;
+  fastIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  fastSourceProbs: Partial<Record<SourceLabel, number>>;
+  fastEqFreqHz: number | null;
+  fastEqGainDb: number | null;
+  slowIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  slowSourceProbs: Partial<Record<SourceLabel, number>>;
+  slowEqFreqHz: number | null;
+  slowEqGainDb: number | null;
+  displayedIssueStates: Record<TrainableIssueLabel, MonitoringIssueState>;
   displayedSourceState: SourceLabel | null;
   displayedEqFreqHz: number | null;
   displayedEqGainDb: number | null;
@@ -235,6 +273,7 @@ export interface AnalysisResult {
   stemService?: StemServiceStatus;
   sourceEqRecommendations?: SourceEqRecommendation[];
   ml_output?: MlInferenceOutput;
+  monitoringInterpretation?: MonitoringInterpretation;
   monitoringStabilization?: MonitoringStabilizationDebug;
   engine?: AnalysisEngine;
   timestamp?: number;

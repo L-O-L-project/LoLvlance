@@ -1,7 +1,10 @@
 import type {
   AnalysisResult,
+  DetectedAudioSource,
   MonitoringEqDecision,
+  MonitoringInterpretation,
   MonitoringIssueDecision,
+  MonitoringIssueState,
   MonitoringSourceDecision,
   MonitoringStabilizationDebug,
   SourceLabel,
@@ -11,18 +14,36 @@ import {
   EQ_EMA_ALPHA,
   EQ_MIN_DISPLAY_FREQ_DELTA_HZ,
   EQ_MIN_DISPLAY_GAIN_DELTA_DB,
+  EQ_SUDDEN_SHIFT_FREQ_DELTA_HZ,
+  EQ_SUDDEN_SHIFT_GAIN_DELTA_DB,
   ISSUE_EMA_ALPHA,
   ISSUE_OFF_THRESHOLD,
   ISSUE_ON_THRESHOLD,
+  ISSUE_PERSISTENT_SLOW_FORCE_HOLD_THRESHOLD,
+  ISSUE_PERSISTENT_SLOW_FORCE_ON_THRESHOLD,
+  ISSUE_PERSISTENT_SLOW_HOLD_THRESHOLD,
+  ISSUE_PERSISTENT_SLOW_ON_THRESHOLD,
+  ISSUE_TRANSIENT_SLOW_MAX_HOLD_THRESHOLD,
+  ISSUE_TRANSIENT_SLOW_MAX_ON_THRESHOLD,
   SOURCE_EMA_ALPHA,
-  SOURCE_SWITCH_MARGIN
+  SOURCE_SWITCH_MARGIN,
+  SOURCE_SWITCH_SUSTAINED_FRAMES
 } from '../config/monitoringStabilization';
 import { buildSourceAwareEqRecommendations } from './sourceAwareEq';
 import { buildDetectedSourcesFromScores, buildMlAnalysisResult } from './mlPresentation';
+import {
+  appendMonitoringTimeBufferFrame,
+  buildSlowSignalFromTimeBuffer,
+  createMonitoringTimeBuffer,
+  getRecentDominantSourceFrameCount,
+  serializeMonitoringTimeBuffer,
+  type MonitoringTimeBuffer
+} from './monitoringTimeBuffer';
 import { ISSUE_LABELS, SOURCE_LABELS } from './mlSchema';
 
 export interface MonitoringMlRuntimeState {
   hasSmoothedFrame: boolean;
+  timeBuffer: MonitoringTimeBuffer;
   rawIssueProbs: Record<TrainableIssueLabel, number>;
   rawSourceProbs: Record<SourceLabel, number>;
   rawEqFreqHz: number | null;
@@ -31,7 +52,11 @@ export interface MonitoringMlRuntimeState {
   smoothedSourceProbs: Record<SourceLabel, number>;
   smoothedEqFreqHz: number | null;
   smoothedEqGainDb: number | null;
-  displayedIssueState: Record<TrainableIssueLabel, boolean>;
+  slowIssueProbs: Record<TrainableIssueLabel, number>;
+  slowSourceProbs: Record<SourceLabel, number>;
+  slowEqFreqHz: number | null;
+  slowEqGainDb: number | null;
+  displayedIssueStates: Record<TrainableIssueLabel, MonitoringIssueState>;
   displayedSourceState: SourceLabel | null;
   displayedEqFreqHz: number | null;
   displayedEqGainDb: number | null;
@@ -47,6 +72,7 @@ interface MonitoringMlPayload {
 export function createInitialMonitoringMlRuntimeState(): MonitoringMlRuntimeState {
   return {
     hasSmoothedFrame: false,
+    timeBuffer: createMonitoringTimeBuffer(),
     rawIssueProbs: createIssueProbabilityRecord(),
     rawSourceProbs: createSourceProbabilityRecord(),
     rawEqFreqHz: null,
@@ -55,7 +81,11 @@ export function createInitialMonitoringMlRuntimeState(): MonitoringMlRuntimeStat
     smoothedSourceProbs: createSourceProbabilityRecord(),
     smoothedEqFreqHz: null,
     smoothedEqGainDb: null,
-    displayedIssueState: createIssueStateRecord(),
+    slowIssueProbs: createIssueProbabilityRecord(),
+    slowSourceProbs: createSourceProbabilityRecord(),
+    slowEqFreqHz: null,
+    slowEqGainDb: null,
+    displayedIssueStates: createIssueStateRecord(),
     displayedSourceState: null,
     displayedEqFreqHz: null,
     displayedEqGainDb: null
@@ -121,12 +151,14 @@ export function advanceMonitoringMlRuntimeState({
   currentState,
   rawResult,
   now,
-  commitDisplayed
+  commitDisplayed,
+  captureDebugSnapshot = false
 }: {
   currentState: MonitoringMlRuntimeState;
   rawResult: AnalysisResult;
   now: number;
   commitDisplayed: boolean;
+  captureDebugSnapshot?: boolean;
 }) {
   const payload = extractMonitoringMlPayload(rawResult);
 
@@ -138,6 +170,22 @@ export function advanceMonitoringMlRuntimeState({
     };
   }
 
+  const fastIssueProbs = smoothVectorEMA(
+    ISSUE_LABELS,
+    currentState.smoothedIssueProbs,
+    payload.issueProbs,
+    ISSUE_EMA_ALPHA,
+    currentState.hasSmoothedFrame
+  );
+  const fastSourceProbs = smoothVectorEMA(
+    SOURCE_LABELS,
+    currentState.smoothedSourceProbs,
+    payload.sourceProbs,
+    SOURCE_EMA_ALPHA,
+    currentState.hasSmoothedFrame
+  );
+  const fastEqFreqHz = smoothScalarEMA(currentState.smoothedEqFreqHz, payload.eqFreqHz, EQ_EMA_ALPHA);
+  const fastEqGainDb = smoothScalarEMA(currentState.smoothedEqGainDb, payload.eqGainDb, EQ_EMA_ALPHA);
   const nextState: MonitoringMlRuntimeState = {
     ...currentState,
     hasSmoothedFrame: true,
@@ -145,39 +193,63 @@ export function advanceMonitoringMlRuntimeState({
     rawSourceProbs: payload.sourceProbs,
     rawEqFreqHz: payload.eqFreqHz,
     rawEqGainDb: payload.eqGainDb,
-    smoothedIssueProbs: smoothVectorEMA(
-      ISSUE_LABELS,
-      currentState.smoothedIssueProbs,
-      payload.issueProbs,
-      ISSUE_EMA_ALPHA,
-      currentState.hasSmoothedFrame
-    ),
-    smoothedSourceProbs: smoothVectorEMA(
-      SOURCE_LABELS,
-      currentState.smoothedSourceProbs,
-      payload.sourceProbs,
-      SOURCE_EMA_ALPHA,
-      currentState.hasSmoothedFrame
-    ),
-    smoothedEqFreqHz: smoothScalarEMA(currentState.smoothedEqFreqHz, payload.eqFreqHz, EQ_EMA_ALPHA),
-    smoothedEqGainDb: smoothScalarEMA(currentState.smoothedEqGainDb, payload.eqGainDb, EQ_EMA_ALPHA)
+    smoothedIssueProbs: fastIssueProbs,
+    smoothedSourceProbs: fastSourceProbs,
+    smoothedEqFreqHz: fastEqFreqHz,
+    smoothedEqGainDb: fastEqGainDb
   };
 
+  if (fastEqFreqHz !== null && fastEqGainDb !== null) {
+    appendMonitoringTimeBufferFrame(nextState.timeBuffer, {
+      timestamp: now,
+      fastIssueProbs,
+      fastSourceProbs,
+      fastEqFreqHz,
+      fastEqGainDb
+    });
+  }
+
+  const slowSignal = buildSlowSignalFromTimeBuffer(nextState.timeBuffer);
+  nextState.slowIssueProbs = slowSignal.issueProbs;
+  nextState.slowSourceProbs = slowSignal.sourceProbs;
+  nextState.slowEqFreqHz = slowSignal.eqFreqHz;
+  nextState.slowEqGainDb = slowSignal.eqGainDb;
+
   const issueUpdate = commitDisplayed
-    ? applyIssueHysteresis(currentState.displayedIssueState, nextState.smoothedIssueProbs)
+    ? applyIssueStateDecisions(
+        currentState.displayedIssueStates,
+        fastIssueProbs,
+        nextState.slowIssueProbs
+      )
     : null;
   const sourceDecision = commitDisplayed
-    ? selectStableDominantSource(currentState.displayedSourceState, nextState.smoothedSourceProbs)
+    ? selectStableDominantSource(
+        currentState.displayedSourceState,
+        nextState.slowSourceProbs,
+        nextState.timeBuffer
+      )
     : null;
   const freqDecision = commitDisplayed
-    ? applyEqDisplayThreshold(currentState.displayedEqFreqHz, nextState.smoothedEqFreqHz, EQ_MIN_DISPLAY_FREQ_DELTA_HZ)
+    ? applyEqDisplayThreshold(
+        currentState.displayedEqFreqHz,
+        fastEqFreqHz,
+        nextState.slowEqFreqHz,
+        EQ_MIN_DISPLAY_FREQ_DELTA_HZ,
+        EQ_SUDDEN_SHIFT_FREQ_DELTA_HZ
+      )
     : null;
   const gainDecision = commitDisplayed
-    ? applyEqDisplayThreshold(currentState.displayedEqGainDb, nextState.smoothedEqGainDb, EQ_MIN_DISPLAY_GAIN_DELTA_DB)
+    ? applyEqDisplayThreshold(
+        currentState.displayedEqGainDb,
+        fastEqGainDb,
+        nextState.slowEqGainDb,
+        EQ_MIN_DISPLAY_GAIN_DELTA_DB,
+        EQ_SUDDEN_SHIFT_GAIN_DELTA_DB
+      )
     : null;
 
   if (issueUpdate) {
-    nextState.displayedIssueState = issueUpdate.nextState;
+    nextState.displayedIssueStates = issueUpdate.nextStates;
   }
 
   if (sourceDecision) {
@@ -192,28 +264,40 @@ export function advanceMonitoringMlRuntimeState({
     nextState.displayedEqGainDb = gainDecision.displayedValue;
   }
 
-  const debugSnapshot: MonitoringStabilizationDebug = {
-    inferenceTimestamp: now,
-    displayCommitted: commitDisplayed,
-    rawIssueProbs: roundScoreRecord(nextState.rawIssueProbs),
-    rawSourceProbs: roundScoreRecord(nextState.rawSourceProbs),
-    rawEqFreqHz: roundNullable(nextState.rawEqFreqHz),
-    rawEqGainDb: roundNullable(nextState.rawEqGainDb, 1),
-    smoothedIssueProbs: roundScoreRecord(nextState.smoothedIssueProbs),
-    smoothedSourceProbs: roundScoreRecord(nextState.smoothedSourceProbs),
-    smoothedEqFreqHz: roundNullable(nextState.smoothedEqFreqHz),
-    smoothedEqGainDb: roundNullable(nextState.smoothedEqGainDb, 1),
-    displayedIssueState: { ...nextState.displayedIssueState },
-    displayedSourceState: nextState.displayedSourceState,
-    displayedEqFreqHz: roundNullable(nextState.displayedEqFreqHz),
-    displayedEqGainDb: roundNullable(nextState.displayedEqGainDb, 1),
-    issueDecisions: issueUpdate?.decisions ?? [],
-    sourceDecision,
-    eqDecisions: {
-      freq: freqDecision ?? createMissingEqDecision(EQ_MIN_DISPLAY_FREQ_DELTA_HZ),
-      gain: gainDecision ?? createMissingEqDecision(EQ_MIN_DISPLAY_GAIN_DELTA_DB)
-    }
-  };
+  const interpretation = buildMonitoringInterpretation(nextState, {
+    suddenEqShift: Boolean(freqDecision?.suddenShift || gainDecision?.suddenShift)
+  });
+  const debugSnapshot: MonitoringStabilizationDebug | undefined = captureDebugSnapshot
+    ? {
+        inferenceTimestamp: now,
+        displayCommitted: commitDisplayed,
+        bufferSize: nextState.timeBuffer.size,
+        bufferCapacity: nextState.timeBuffer.capacity,
+        bufferFrames: serializeMonitoringTimeBuffer(nextState.timeBuffer),
+        rawIssueProbs: roundScoreRecord(nextState.rawIssueProbs),
+        rawSourceProbs: roundScoreRecord(nextState.rawSourceProbs),
+        rawEqFreqHz: roundNullable(nextState.rawEqFreqHz),
+        rawEqGainDb: roundNullable(nextState.rawEqGainDb, 1),
+        fastIssueProbs: roundScoreRecord(nextState.smoothedIssueProbs),
+        fastSourceProbs: roundScoreRecord(nextState.smoothedSourceProbs),
+        fastEqFreqHz: roundNullable(nextState.smoothedEqFreqHz),
+        fastEqGainDb: roundNullable(nextState.smoothedEqGainDb, 1),
+        slowIssueProbs: roundScoreRecord(nextState.slowIssueProbs),
+        slowSourceProbs: roundScoreRecord(nextState.slowSourceProbs),
+        slowEqFreqHz: roundNullable(nextState.slowEqFreqHz),
+        slowEqGainDb: roundNullable(nextState.slowEqGainDb, 1),
+        displayedIssueStates: { ...nextState.displayedIssueStates },
+        displayedSourceState: nextState.displayedSourceState,
+        displayedEqFreqHz: roundNullable(nextState.displayedEqFreqHz),
+        displayedEqGainDb: roundNullable(nextState.displayedEqGainDb, 1),
+        issueDecisions: issueUpdate?.decisions ?? [],
+        sourceDecision,
+        eqDecisions: {
+          freq: freqDecision ?? createMissingEqDecision(EQ_MIN_DISPLAY_FREQ_DELTA_HZ),
+          gain: gainDecision ?? createMissingEqDecision(EQ_MIN_DISPLAY_GAIN_DELTA_DB)
+        }
+      }
+    : undefined;
 
   if (!commitDisplayed) {
     return {
@@ -223,19 +307,19 @@ export function advanceMonitoringMlRuntimeState({
     };
   }
 
-  const displayedDetectedSources = (rawResult.detectedSources?.length ?? 0) > 0
-    ? rawResult.detectedSources!
-    : buildDetectedSourcesFromScores(nextState.smoothedSourceProbs, {
-        dominantSource: nextState.displayedSourceState
-      });
+  const displayedDetectedSources = buildDisplayedDetectedSources(
+    rawResult.detectedSources,
+    nextState.slowSourceProbs,
+    nextState.displayedSourceState
+  );
   const displayedAnalysis = buildMlAnalysisResult({
-    issueScores: nextState.smoothedIssueProbs,
-    sourceScores: nextState.smoothedSourceProbs,
+    issueScores: nextState.slowIssueProbs,
+    sourceScores: nextState.slowSourceProbs,
     eq: {
-      frequencyHz: nextState.displayedEqFreqHz ?? nextState.smoothedEqFreqHz ?? payload.eqFreqHz,
-      gainDb: nextState.displayedEqGainDb ?? nextState.smoothedEqGainDb ?? payload.eqGainDb
+      frequencyHz: nextState.displayedEqFreqHz ?? nextState.slowEqFreqHz ?? fastEqFreqHz ?? payload.eqFreqHz,
+      gainDb: nextState.displayedEqGainDb ?? nextState.slowEqGainDb ?? fastEqGainDb ?? payload.eqGainDb
     },
-    activeIssues: ISSUE_LABELS.filter((label) => nextState.displayedIssueState[label]),
+    activeIssues: ISSUE_LABELS.filter((label) => nextState.displayedIssueStates[label] === 'persistent'),
     displayedSource: nextState.displayedSourceState,
     detectedSources: displayedDetectedSources
   });
@@ -251,6 +335,7 @@ export function advanceMonitoringMlRuntimeState({
       stemMetrics: rawResult.stemMetrics ?? []
     }),
     ml_output: displayedAnalysis.ml_output,
+    monitoringInterpretation: interpretation,
     monitoringStabilization: debugSnapshot,
     timestamp: now
   };
@@ -262,51 +347,75 @@ export function advanceMonitoringMlRuntimeState({
   };
 }
 
-function applyIssueHysteresis(
-  previousState: Record<TrainableIssueLabel, boolean>,
-  smoothedProbabilities: Record<TrainableIssueLabel, number>
+function applyIssueStateDecisions(
+  previousStates: Record<TrainableIssueLabel, MonitoringIssueState>,
+  fastProbabilities: Record<TrainableIssueLabel, number>,
+  slowProbabilities: Record<TrainableIssueLabel, number>
 ) {
-  const nextState = { ...previousState };
+  const nextStates = { ...previousStates };
   const decisions: MonitoringIssueDecision[] = [];
 
   ISSUE_LABELS.forEach((label) => {
-    const smoothedProbability = clamp(smoothedProbabilities[label] ?? 0, 0, 1);
-    const wasActive = previousState[label];
-    let isActive = wasActive;
-    let reason: MonitoringIssueDecision['reason'] = 'hold';
+    const previousState = previousStates[label];
+    const fastProbability = clamp(fastProbabilities[label] ?? 0, 0, 1);
+    const slowProbability = clamp(slowProbabilities[label] ?? 0, 0, 1);
+    const persistentOn = slowProbability >= ISSUE_PERSISTENT_SLOW_FORCE_ON_THRESHOLD
+      || (fastProbability >= ISSUE_ON_THRESHOLD && slowProbability >= ISSUE_PERSISTENT_SLOW_ON_THRESHOLD);
+    const persistentHold = slowProbability >= ISSUE_PERSISTENT_SLOW_FORCE_HOLD_THRESHOLD
+      || (fastProbability >= ISSUE_OFF_THRESHOLD && slowProbability >= ISSUE_PERSISTENT_SLOW_HOLD_THRESHOLD);
+    const transientOn = fastProbability >= ISSUE_ON_THRESHOLD
+      && slowProbability <= ISSUE_TRANSIENT_SLOW_MAX_ON_THRESHOLD;
+    const transientHold = fastProbability >= ISSUE_OFF_THRESHOLD
+      && slowProbability <= ISSUE_TRANSIENT_SLOW_MAX_HOLD_THRESHOLD;
+    let nextState: MonitoringIssueState = 'off';
+    let reason: MonitoringIssueDecision['reason'] = 'off';
 
-    if (!wasActive && smoothedProbability >= ISSUE_ON_THRESHOLD) {
-      isActive = true;
-      reason = 'switch_on';
-    } else if (wasActive && smoothedProbability <= ISSUE_OFF_THRESHOLD) {
-      isActive = false;
-      reason = 'switch_off';
+    if (previousState === 'persistent') {
+      if (persistentHold) {
+        nextState = 'persistent';
+        reason = slowProbability >= ISSUE_PERSISTENT_SLOW_FORCE_HOLD_THRESHOLD
+          ? 'persistent_from_slow'
+          : 'persistent_hold';
+      } else if (transientOn) {
+        nextState = 'transient';
+        reason = 'transient_on';
+      }
+    } else if (persistentOn) {
+      nextState = 'persistent';
+      reason = slowProbability >= ISSUE_PERSISTENT_SLOW_FORCE_ON_THRESHOLD
+        ? 'persistent_from_slow'
+        : 'persistent_on';
+    } else if (previousState === 'transient' ? transientHold : transientOn) {
+      nextState = 'transient';
+      reason = previousState === 'transient' ? 'transient_hold' : 'transient_on';
     }
 
-    nextState[label] = isActive;
+    nextStates[label] = nextState;
     decisions.push({
       label,
-      previousState: wasActive,
-      nextState: isActive,
-      smoothedProbability: Number(smoothedProbability.toFixed(4)),
+      previousState,
+      nextState,
+      fastProbability: Number(fastProbability.toFixed(4)),
+      slowProbability: Number(slowProbability.toFixed(4)),
       reason
     });
   });
 
   return {
-    nextState,
+    nextStates,
     decisions
   };
 }
 
 function selectStableDominantSource(
   previousSource: SourceLabel | null,
-  smoothedProbabilities: Record<SourceLabel, number>
+  slowProbabilities: Record<SourceLabel, number>,
+  timeBuffer: MonitoringTimeBuffer
 ): MonitoringSourceDecision {
   const rankedSources = SOURCE_LABELS
     .map((source) => ({
       source,
-      probability: clamp(smoothedProbabilities[source] ?? 0, 0, 1)
+      probability: clamp(slowProbabilities[source] ?? 0, 0, 1)
     }))
     .sort((left, right) => right.probability - left.probability);
   const candidate = rankedSources[0];
@@ -318,12 +427,20 @@ function selectStableDominantSource(
       previousSource,
       candidateSource: null,
       nextSource: previousSource,
-      previousProbability: previousSource ? Number((smoothedProbabilities[previousSource] ?? 0).toFixed(4)) : null,
+      previousProbability: previousSource ? Number((slowProbabilities[previousSource] ?? 0).toFixed(4)) : null,
       candidateProbability: null,
       margin: SOURCE_SWITCH_MARGIN,
+      sustainedFrames: 0,
+      requiredFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
       reason: 'empty'
     };
   }
+
+  const sustainedFrames = getRecentDominantSourceFrameCount(
+    timeBuffer,
+    candidateSource,
+    SOURCE_SWITCH_SUSTAINED_FRAMES
+  );
 
   if (!previousSource) {
     return {
@@ -333,11 +450,13 @@ function selectStableDominantSource(
       previousProbability: null,
       candidateProbability,
       margin: SOURCE_SWITCH_MARGIN,
+      sustainedFrames,
+      requiredFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
       reason: 'initial'
     };
   }
 
-  const previousProbability = Number((smoothedProbabilities[previousSource] ?? 0).toFixed(4));
+  const previousProbability = Number((slowProbabilities[previousSource] ?? 0).toFixed(4));
 
   if (candidateSource === previousSource) {
     return {
@@ -347,19 +466,37 @@ function selectStableDominantSource(
       previousProbability,
       candidateProbability,
       margin: SOURCE_SWITCH_MARGIN,
+      sustainedFrames,
+      requiredFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
       reason: 'retain'
     };
   }
 
   if ((candidateProbability - previousProbability) >= SOURCE_SWITCH_MARGIN) {
+    if (sustainedFrames >= SOURCE_SWITCH_SUSTAINED_FRAMES) {
+      return {
+        previousSource,
+        candidateSource,
+        nextSource: candidateSource,
+        previousProbability,
+        candidateProbability,
+        margin: SOURCE_SWITCH_MARGIN,
+        sustainedFrames,
+        requiredFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
+        reason: 'switch'
+      };
+    }
+
     return {
       previousSource,
       candidateSource,
-      nextSource: candidateSource,
+      nextSource: previousSource,
       previousProbability,
       candidateProbability,
       margin: SOURCE_SWITCH_MARGIN,
-      reason: 'switch'
+      sustainedFrames,
+      requiredFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
+      reason: 'pending'
     };
   }
 
@@ -370,62 +507,150 @@ function selectStableDominantSource(
     previousProbability,
     candidateProbability,
     margin: SOURCE_SWITCH_MARGIN,
+    sustainedFrames,
+    requiredFrames: SOURCE_SWITCH_SUSTAINED_FRAMES,
     reason: 'retain'
   };
 }
 
 function applyEqDisplayThreshold(
   previousValue: number | null,
-  smoothedValue: number | null,
-  threshold: number
+  fastValue: number | null,
+  slowValue: number | null,
+  threshold: number,
+  suddenShiftThreshold: number
 ): MonitoringEqDecision {
-  if (smoothedValue === null || !Number.isFinite(smoothedValue)) {
+  if (slowValue === null || !Number.isFinite(slowValue)) {
     return createMissingEqDecision(threshold);
   }
 
-  const roundedSmoothedValue = roundForDisplay(smoothedValue, threshold);
+  const roundedSlowValue = roundForDisplay(slowValue, threshold);
+  const roundedFastValue = roundNullable(fastValue, threshold < 1 ? 1 : 0);
+  const suddenShift = fastValue !== null
+    && Number.isFinite(fastValue)
+    && Math.abs((fastValue ?? 0) - slowValue) >= suddenShiftThreshold;
 
   if (previousValue === null || !Number.isFinite(previousValue)) {
     return {
       previousValue: null,
-      smoothedValue: roundedSmoothedValue,
-      displayedValue: roundedSmoothedValue,
+      fastValue: roundedFastValue,
+      slowValue: roundedSlowValue,
+      displayedValue: roundedSlowValue,
       delta: null,
       threshold,
+      suddenShift,
       reason: 'initial'
     };
   }
 
-  const delta = Math.abs(smoothedValue - previousValue);
+  const delta = Math.abs(slowValue - previousValue);
 
   if (delta >= threshold) {
     return {
       previousValue: roundNullable(previousValue, threshold < 1 ? 1 : 0),
-      smoothedValue: roundedSmoothedValue,
-      displayedValue: roundedSmoothedValue,
+      fastValue: roundedFastValue,
+      slowValue: roundedSlowValue,
+      displayedValue: roundedSlowValue,
       delta: Number(delta.toFixed(threshold < 1 ? 2 : 1)),
       threshold,
+      suddenShift,
       reason: 'updated'
     };
   }
 
   return {
     previousValue: roundNullable(previousValue, threshold < 1 ? 1 : 0),
-    smoothedValue: roundedSmoothedValue,
+    fastValue: roundedFastValue,
+    slowValue: roundedSlowValue,
     displayedValue: roundNullable(previousValue, threshold < 1 ? 1 : 0),
     delta: Number(delta.toFixed(threshold < 1 ? 2 : 1)),
     threshold,
+    suddenShift,
     reason: 'suppressed'
   };
+}
+
+function buildMonitoringInterpretation(
+  state: MonitoringMlRuntimeState,
+  options: {
+    suddenEqShift: boolean;
+  }
+): MonitoringInterpretation {
+  const transientIssues = ISSUE_LABELS.filter((label) => state.displayedIssueStates[label] === 'transient');
+  const persistentIssues = ISSUE_LABELS.filter((label) => state.displayedIssueStates[label] === 'persistent');
+
+  return {
+    fastIssueProbs: roundScoreRecord(state.smoothedIssueProbs),
+    slowIssueProbs: roundScoreRecord(state.slowIssueProbs),
+    fastSourceProbs: roundScoreRecord(state.smoothedSourceProbs),
+    slowSourceProbs: roundScoreRecord(state.slowSourceProbs),
+    fastEqFreqHz: roundNullable(state.smoothedEqFreqHz),
+    slowEqFreqHz: roundNullable(state.slowEqFreqHz),
+    fastEqGainDb: roundNullable(state.smoothedEqGainDb, 1),
+    slowEqGainDb: roundNullable(state.slowEqGainDb, 1),
+    issueStates: { ...state.displayedIssueStates },
+    transientIssues,
+    persistentIssues,
+    displayedSourceState: state.displayedSourceState,
+    suddenEqShift: options.suddenEqShift
+  };
+}
+
+function buildDisplayedDetectedSources(
+  detectedSources: AnalysisResult['detectedSources'],
+  slowSourceProbabilities: Record<SourceLabel, number>,
+  displayedSource: SourceLabel | null
+) {
+  if (!detectedSources || detectedSources.length === 0) {
+    return buildDetectedSourcesFromScores(slowSourceProbabilities, {
+      dominantSource: displayedSource
+    });
+  }
+
+  const sourceMap = new Map(
+    detectedSources.map((entry) => [entry.source, {
+      ...entry,
+      labels: uniqueInOrder(entry.labels)
+    }])
+  );
+
+  if (displayedSource && (slowSourceProbabilities[displayedSource] ?? 0) > 0) {
+    const existing = sourceMap.get(displayedSource);
+    sourceMap.set(displayedSource, {
+      source: displayedSource,
+      confidence: Number(Math.max(existing?.confidence ?? 0, slowSourceProbabilities[displayedSource] ?? 0).toFixed(2)),
+      labels: uniqueInOrder([
+        `stable:${displayedSource}`,
+        `model:${displayedSource}`,
+        ...(existing?.labels ?? [])
+      ])
+    } satisfies DetectedAudioSource);
+  }
+
+  return [...sourceMap.values()]
+    .sort((left, right) => {
+      if (displayedSource && left.source === displayedSource && right.source !== displayedSource) {
+        return -1;
+      }
+
+      if (displayedSource && right.source === displayedSource && left.source !== displayedSource) {
+        return 1;
+      }
+
+      return right.confidence - left.confidence;
+    })
+    .slice(0, 5);
 }
 
 function createMissingEqDecision(threshold: number): MonitoringEqDecision {
   return {
     previousValue: null,
-    smoothedValue: null,
+    fastValue: null,
+    slowValue: null,
     displayedValue: null,
     delta: null,
     threshold,
+    suddenShift: false,
     reason: 'missing'
   };
 }
@@ -446,9 +671,9 @@ function createSourceProbabilityRecord() {
 
 function createIssueStateRecord() {
   return ISSUE_LABELS.reduce((record, label) => {
-    record[label] = false;
+    record[label] = 'off';
     return record;
-  }, {} as Record<TrainableIssueLabel, boolean>);
+  }, {} as Record<TrainableIssueLabel, MonitoringIssueState>);
 }
 
 function roundScoreRecord<T extends string>(record: Record<T, number>) {
@@ -469,6 +694,10 @@ function roundForDisplay(value: number, threshold: number) {
   return threshold < 1
     ? Number(value.toFixed(1))
     : Math.round(value);
+}
+
+function uniqueInOrder<T>(values: T[]) {
+  return values.filter((value, index) => values.indexOf(value) === index);
 }
 
 function clamp(value: number, min: number, max: number) {

@@ -21,9 +21,10 @@ interface ResultCardsProps {
 
 export function ResultCards({ result, language, isLive = false, features }: ResultCardsProps) {
   const t = translations[language];
+  const transientIssues = isLive ? (result.monitoringInterpretation?.transientIssues ?? []) : [];
 
   // Handle "no issues" case
-  if (result.problems.length === 0) {
+  if (result.problems.length === 0 && transientIssues.length === 0) {
     return (
       <>
       <motion.div
@@ -91,6 +92,11 @@ export function ResultCards({ result, language, isLive = false, features }: Resu
       )}
 
       <StemServiceStatusCard result={result} language={language} />
+
+      <TransientWarningsCard
+        transientIssues={transientIssues}
+        language={language}
+      />
 
       <DetectedSourcesCard
         detectedSources={result.detectedSources}
@@ -312,6 +318,40 @@ function SourceEqRecommendationsCard({
               {recommendation.reason}
             </div>
           </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function TransientWarningsCard({
+  transientIssues,
+  language
+}: {
+  transientIssues: string[];
+  language: Language;
+}) {
+  if (transientIssues.length === 0) {
+    return null;
+  }
+
+  const t = translations[language];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="w-full rounded-xl border border-amber-500/25 bg-amber-500/10 p-4"
+    >
+      <div className="text-xs text-amber-200/80 mb-3">{t.transientWarnings}</div>
+      <div className="flex flex-wrap gap-2">
+        {transientIssues.map((issue) => (
+          <span
+            key={issue}
+            className="px-3 py-1.5 rounded-lg border border-amber-400/20 bg-black/20 text-sm font-medium text-amber-100"
+          >
+            {t[issue as keyof typeof t] || issue}
+          </span>
         ))}
       </div>
     </motion.div>

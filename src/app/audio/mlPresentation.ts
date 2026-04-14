@@ -2,6 +2,7 @@ import type {
   AnalysisResult,
   DetectedAudioSource,
   DerivedDiagnosisResult,
+  DerivedDiagnosisType,
   DiagnosticProblem,
   EQRecommendation,
   ProblemType,
@@ -23,6 +24,13 @@ import {
 const MODEL_MIN_HZ = 80;
 const MODEL_MAX_HZ = 8000;
 const MIN_SOURCE_DISPLAY_SCORE = 0.25;
+const DERIVED_DIAGNOSIS_PREREQUISITES: Partial<Record<DerivedDiagnosisType, TrainableIssueLabel[]>> = {
+  vocal_buried: ['buried'],
+  guitar_harsh: ['harsh'],
+  bass_muddy: ['muddy'],
+  drums_overpower: ['harsh', 'boomy'],
+  keys_masking: ['buried', 'boxy']
+};
 
 export interface MlPresentationEq {
   frequencyHz: number;
@@ -46,41 +54,36 @@ export function buildMlAnalysisResult({
   displayedSource,
   detectedSources
 }: BuildMlAnalysisResultParams): AnalysisResult {
-  const effectiveIssueScores = activeIssues
+  const mlOutput = buildMlInferenceOutput(issueScores, sourceScores, {
+    frequency_hz: eq.frequencyHz,
+    frequency_normalized: frequencyToNormalized(eq.frequencyHz),
+    gain_db: eq.gainDb
+  });
+  const problemIssueScores = activeIssues
     ? ISSUE_LABELS.reduce((record, label) => {
         record[label] = activeIssues.includes(label) ? (issueScores[label] ?? 0) : 0;
         return record;
       }, {} as Record<TrainableIssueLabel, number>)
     : issueScores;
-  const effectiveSourceScores = displayedSource
-    ? SOURCE_LABELS.reduce((record, label) => {
-        record[label] = label === displayedSource ? (sourceScores[label] ?? 0) : 0;
-        return record;
-      }, {} as Record<SourceLabel, number>)
-    : sourceScores;
-  const mlOutput = buildMlInferenceOutput(effectiveIssueScores, effectiveSourceScores, {
-    frequency_hz: eq.frequencyHz,
-    frequency_normalized: frequencyToNormalized(eq.frequencyHz),
-    gain_db: eq.gainDb
-  });
   const effectiveDetectedSources = detectedSources ?? buildDetectedSourcesFromScores(sourceScores, {
     dominantSource: displayedSource
   });
   const issueLabels = (
     activeIssues
       ? [...activeIssues]
-      : ISSUE_LABELS.filter((label) => (effectiveIssueScores[label] ?? 0) >= ISSUE_DEFAULT_THRESHOLDS[label])
-  ).sort((left, right) => (effectiveIssueScores[right] ?? 0) - (effectiveIssueScores[left] ?? 0));
+      : ISSUE_LABELS.filter((label) => (problemIssueScores[label] ?? 0) >= ISSUE_DEFAULT_THRESHOLDS[label])
+  ).sort((left, right) => (problemIssueScores[right] ?? 0) - (problemIssueScores[left] ?? 0));
 
   const issueProblems = issueLabels.map((label, index) => buildIssueProblem({
     label,
-    score: effectiveIssueScores[label] ?? 0,
+    score: problemIssueScores[label] ?? 0,
     detectedSources: effectiveDetectedSources,
     useModelEq: index === 0,
     modelEqFrequencyHz: eq.frequencyHz,
     modelEqGainDb: eq.gainDb
   }));
   const derivedProblems = Object.entries(mlOutput.derived_diagnoses)
+    .filter(([label]) => shouldDisplayDerivedProblem(label as DerivedDiagnosisType, activeIssues, displayedSource))
     .map(([label, diagnosis]) => buildDerivedProblem(label as ProblemType, diagnosis!))
     .filter((problem): problem is DiagnosticProblem => problem !== null);
   const eqRecommendations = issueProblems
@@ -225,6 +228,28 @@ function buildDerivedProblem(
     details: problemCauseMap[label] ?? [],
     actions: diagnosis.explanation ? [diagnosis.explanation] : diagnosis.reasons
   };
+}
+
+function shouldDisplayDerivedProblem(
+  label: DerivedDiagnosisType,
+  activeIssues: readonly TrainableIssueLabel[] | undefined,
+  displayedSource: SourceLabel | null | undefined
+) {
+  if (displayedSource) {
+    const derivedSource = label.split('_')[0] as SourceLabel;
+
+    if (derivedSource !== displayedSource) {
+      return false;
+    }
+  }
+
+  if (!activeIssues) {
+    return true;
+  }
+
+  const prerequisites = DERIVED_DIAGNOSIS_PREREQUISITES[label] ?? [];
+
+  return prerequisites.some((issue) => activeIssues.includes(issue));
 }
 
 function buildRecommendationFromProblem(problem: DiagnosticProblem): EQRecommendation | null {
