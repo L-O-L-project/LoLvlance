@@ -343,7 +343,8 @@ Current gate behavior:
 - uses Python 3.11
 - installs `ml/requirements-test.txt`
 - runs the golden evaluator
-- enforces `--min-f1 0.65`
+- compares against `ml/eval/baseline.json`
+- blocks macro regression, per-label collapse, and obvious prediction-bias regressions
 
 ### Important Limitation
 
@@ -456,7 +457,13 @@ python -m venv .venv-ml
   --model-path ml\checkpoints\lightweight_audio_model.onnx `
   --thresholds-path ml\checkpoints\label_thresholds.json `
   --baseline-path ml\eval\baseline.json `
-  --min-f1 0.65
+  --macro-epsilon 0.02 `
+  --per-label-epsilon 0.03 `
+  --weak-label-f1-threshold 0.40 `
+  --weak-label-epsilon 0.02 `
+  --max-ratio-per-label 0.50 `
+  --distribution-slack 0.20 `
+  --entropy-epsilon 0.12
 ```
 
 ### Run ML Tests

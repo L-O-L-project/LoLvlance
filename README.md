@@ -352,8 +352,8 @@ Current gate:
 
 - runs on pushes and pull requests affecting `ml/**`, `eval/**`, and the workflow itself
 - uses `ml/eval/evaluate.py`
-- enforces `--min-f1 0.65`
-- fails if overall F1 drops below threshold or baseline regressions exceed tolerance
+- compares the current run against `ml/eval/baseline.json`
+- fails on macro regression, per-label collapse, or distribution/entropy bias violations
 
 ### Important Limitation
 
@@ -446,7 +446,13 @@ python -m venv .venv-ml
   --model-path ml\checkpoints\lightweight_audio_model.onnx `
   --thresholds-path ml\checkpoints\label_thresholds.json `
   --baseline-path ml\eval\baseline.json `
-  --min-f1 0.65
+  --macro-epsilon 0.02 `
+  --per-label-epsilon 0.03 `
+  --weak-label-f1-threshold 0.40 `
+  --weak-label-epsilon 0.02 `
+  --max-ratio-per-label 0.50 `
+  --distribution-slack 0.20 `
+  --entropy-epsilon 0.12
 ```
 
 ### Run ML Tests

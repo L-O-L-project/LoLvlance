@@ -272,9 +272,11 @@ Workflow:
 .github/workflows/eval.yml
 ```
 
-Current threshold:
+Current gate:
 
-- `min_f1 = 0.65`
+- compares the current run against `ml/eval/baseline.json`
+- allows small baseline-relative movement with configurable epsilons
+- fails on macro regression, per-label collapse, or obvious prediction bias
 
 ### Important Limitation
 
