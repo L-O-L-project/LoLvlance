@@ -24,7 +24,8 @@ interface DerivedDiagnosisCandidate {
 
 export function buildMlInferenceOutput(
   issueScores: Record<TrainableIssueLabel, number>,
-  sourceScores: Record<SourceLabel, number>
+  sourceScores: Record<SourceLabel, number>,
+  modelEq?: MlInferenceOutput['metadata']['model_eq']
 ): MlInferenceOutput {
   const derived_diagnoses = deriveSourceSpecificDiagnoses(issueScores, sourceScores);
 
@@ -45,7 +46,8 @@ export function buildMlInferenceOutput(
         ...Object.fromEntries(ISSUE_LABELS.map((label) => [label, 'weak'])),
         ...Object.fromEntries(SOURCE_LABELS.map((label) => [label, 'weak'])),
         ...Object.fromEntries(DERIVED_DIAGNOSIS_LABELS.map((label) => [label, 'derived']))
-      }
+      },
+      model_eq: modelEq
     }
   };
 }

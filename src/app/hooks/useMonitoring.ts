@@ -4,13 +4,9 @@ import type {
   AnalysisEngine,
   BufferedAudioSnapshot,
   DetectedAudioSource,
-  DiagnosticProblem,
   ExtractedAudioFeatures,
   MicrophoneErrorCode,
-  MicrophonePermissionState,
-  MlInferenceOutput,
-  RuleBasedIssue,
-  SourceEqRecommendation
+  MicrophonePermissionState
 } from '../types';
 import {
   appendToCircularBuffer,
@@ -34,6 +30,13 @@ import {
   MODEL_VERSION
 } from '../config/modelRuntime';
 import {
+  MONITORING_DISPLAY_COMMIT_MS,
+  MONITORING_INFERENCE_STRIDE_MS,
+  MONITORING_MIN_BUFFER_MS,
+  MONITORING_WINDOW_SECONDS,
+  isMonitoringStabilizationDebugEnabled
+} from '../config/monitoringStabilization';
+import {
   detectOpenSourceAudioSources,
   warmUpOpenSourceAudioTagger
 } from '../audio/openSourceAudioTagging';
@@ -47,12 +50,11 @@ import {
   logRuleBasedAnalysis,
   ruleAnalysisToDiagnosticProblems
 } from '../audio/ruleBasedAnalysis';
+import {
+  advanceMonitoringMlRuntimeState,
+  createInitialMonitoringMlRuntimeState
+} from '../audio/monitoringStabilization';
 
-const MONITORING_WINDOW_SECONDS = 3;
-const MONITORING_STRIDE_MS = 1000;
-const MONITORING_EMA_ALPHA = 0.3;
-const MONITORING_MIN_BUFFER_MS = 750;
-const CONFIDENCE_DECAY_FLOOR = 0.08;
 const SILENCE_THRESHOLD_DBFS = -38;
 const CAPTURE_WORKLET_NAME = 'soundfix-microphone-capture';
 const CAPTURE_WORKLET_SOURCE = `
@@ -279,7 +281,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const pendingMonitoringPassRef = useRef(false);
   const captureSessionIdRef = useRef(0);
   const isMonitoringRef = useRef(false);
-  const smoothedResultRef = useRef<AnalysisResult | null>(null);
+  const lastDisplayCommitAtRef = useRef<number | null>(null);
+  const monitoringMlStateRef = useRef(createInitialMonitoringMlRuntimeState());
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -307,7 +310,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     isMonitoringRef.current = false;
     pendingMonitoringPassRef.current = false;
     analysisInFlightRef.current = false;
-    smoothedResultRef.current = null;
+    lastDisplayCommitAtRef.current = null;
+    monitoringMlStateRef.current = createInitialMonitoringMlRuntimeState();
   }, []);
 
   const handleIncomingSamples = useCallback((samples: Float32Array, sourceSampleRate: number) => {
@@ -431,15 +435,42 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         return false;
       }
 
-      const smoothedResult = smoothAnalysisResult(
-        smoothedResultRef.current,
-        nextResult,
-        MONITORING_EMA_ALPHA
-      );
+      const now = Date.now();
+      const shouldCommitDisplay = lastDisplayCommitAtRef.current === null
+        || (now - lastDisplayCommitAtRef.current) >= MONITORING_DISPLAY_COMMIT_MS;
+      const {
+        nextState,
+        displayedResult,
+        debugSnapshot
+      } = advanceMonitoringMlRuntimeState({
+        currentState: monitoringMlStateRef.current,
+        rawResult: nextResult,
+        now,
+        commitDisplayed: shouldCommitDisplay
+      });
 
-      smoothedResultRef.current = smoothedResult;
-      onUpdate(smoothedResult);
-      return true;
+      monitoringMlStateRef.current = nextState;
+
+      if (debugSnapshot && isMonitoringStabilizationDebugEnabled()) {
+        console.debug('[audio-monitoring:stabilization]', debugSnapshot);
+      }
+
+      if (displayedResult) {
+        lastDisplayCommitAtRef.current = now;
+        onUpdate(displayedResult);
+        return true;
+      }
+
+      if (!nextResult.ml_output && shouldCommitDisplay) {
+        lastDisplayCommitAtRef.current = now;
+        onUpdate({
+          ...nextResult,
+          timestamp: now
+        });
+        return true;
+      }
+
+      return false;
     } finally {
       analysisInFlightRef.current = false;
 
@@ -688,7 +719,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     clearMonitoringInterval();
     isMonitoringRef.current = true;
     pendingMonitoringPassRef.current = false;
-    smoothedResultRef.current = null;
+    lastDisplayCommitAtRef.current = null;
+    monitoringMlStateRef.current = createInitialMonitoringMlRuntimeState();
     setIsMonitoring(true);
     await runMonitoringPass();
 
@@ -698,7 +730,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       }
 
       void runMonitoringPass();
-    }, MONITORING_STRIDE_MS);
+    }, MONITORING_INFERENCE_STRIDE_MS);
 
     return true;
   }, [clearMonitoringInterval, ensureMicrophoneReady, runMonitoringPass]);
@@ -715,8 +747,9 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       ...getModelRuntimeSnapshot(MODEL_VERSION),
       inferenceTimestamp: new Date().toISOString(),
       monitoringWindowSeconds: MONITORING_WINDOW_SECONDS,
-      monitoringStrideMs: MONITORING_STRIDE_MS,
-      emaAlpha: MONITORING_EMA_ALPHA
+      monitoringStrideMs: MONITORING_INFERENCE_STRIDE_MS,
+      displayCommitMs: MONITORING_DISPLAY_COMMIT_MS,
+      stabilizationDebug: isMonitoringStabilizationDebugEnabled()
     });
 
     if (ENABLE_MODEL) {
@@ -801,177 +834,6 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     stopMonitoring,
     targetSampleRate: TARGET_SAMPLE_RATE
   };
-}
-
-function smoothAnalysisResult(
-  previous: AnalysisResult | null,
-  next: AnalysisResult,
-  alpha: number
-): AnalysisResult {
-  if (!previous) {
-    return {
-      ...next,
-      timestamp: Date.now()
-    };
-  }
-
-  const normalizedAlpha = clamp(alpha, 0.01, 1);
-  const problems = smoothConfidenceItems(previous.problems, next.problems, (problem) => problem.type, normalizedAlpha);
-  const detectedSources = smoothConfidenceItems(
-    previous.detectedSources ?? [],
-    next.detectedSources ?? [],
-    (source) => source.source,
-    normalizedAlpha
-  );
-  const sourceEqRecommendations = smoothConfidenceItems(
-    previous.sourceEqRecommendations ?? [],
-    next.sourceEqRecommendations ?? [],
-    (recommendation) => recommendation.source,
-    normalizedAlpha
-  );
-
-  return {
-    ...next,
-    problems,
-    issues: deriveStableIssues(problems, next.issues ?? previous.issues ?? []),
-    detectedSources,
-    sourceEqRecommendations,
-    ml_output: smoothMlOutput(previous.ml_output, next.ml_output, normalizedAlpha),
-    timestamp: Date.now()
-  };
-}
-
-function smoothConfidenceItems<T extends { confidence: number }>(
-  previous: T[],
-  next: T[],
-  keyForItem: (item: T) => string,
-  alpha: number
-) {
-  const previousMap = new Map(previous.map((item) => [keyForItem(item), item]));
-  const nextMap = new Map(next.map((item) => [keyForItem(item), item]));
-  const keys = new Set([...previousMap.keys(), ...nextMap.keys()]);
-  const smoothed: T[] = [];
-
-  keys.forEach((key) => {
-    const previousItem = previousMap.get(key);
-    const nextItem = nextMap.get(key);
-    const smoothedConfidence = nextItem
-      ? previousItem
-        ? (alpha * nextItem.confidence) + ((1 - alpha) * previousItem.confidence)
-        : nextItem.confidence
-      : ((1 - alpha) * (previousItem?.confidence ?? 0));
-
-    if (smoothedConfidence < CONFIDENCE_DECAY_FLOOR) {
-      return;
-    }
-
-    const baseItem = nextItem ?? previousItem;
-
-    if (!baseItem) {
-      return;
-    }
-
-    smoothed.push({
-      ...baseItem,
-      confidence: Number(clamp(smoothedConfidence, 0, 1).toFixed(2))
-    });
-  });
-
-  return smoothed.sort((left, right) => right.confidence - left.confidence);
-}
-
-function smoothMlOutput(
-  previous: AnalysisResult['ml_output'],
-  next: AnalysisResult['ml_output'],
-  alpha: number
-): MlInferenceOutput | undefined {
-  if (!previous) {
-    return next;
-  }
-
-  if (!next) {
-    return previous;
-  }
-
-  const issues = smoothScoreRecord(previous.issues, next.issues, alpha);
-  const sources = smoothScoreRecord(previous.sources, next.sources, alpha);
-  const previousDiagnoses = previous.derived_diagnoses ?? {};
-  const nextDiagnoses = next.derived_diagnoses ?? {};
-  const diagnosisKeys = new Set([...Object.keys(previousDiagnoses), ...Object.keys(nextDiagnoses)]);
-  const derivedDiagnoses: MlInferenceOutput['derived_diagnoses'] = {};
-
-  diagnosisKeys.forEach((key) => {
-    const previousDiagnosis = previousDiagnoses[key];
-    const nextDiagnosis = nextDiagnoses[key];
-    const smoothedScore = nextDiagnosis
-      ? previousDiagnosis
-        ? (alpha * nextDiagnosis.score) + ((1 - alpha) * previousDiagnosis.score)
-        : nextDiagnosis.score
-      : ((1 - alpha) * (previousDiagnosis?.score ?? 0));
-
-    if (smoothedScore < CONFIDENCE_DECAY_FLOOR) {
-      return;
-    }
-
-    const baseDiagnosis = nextDiagnosis ?? previousDiagnosis;
-
-    if (!baseDiagnosis) {
-      return;
-    }
-
-    derivedDiagnoses[key] = {
-      ...baseDiagnosis,
-      score: Number(clamp(smoothedScore, 0, 1).toFixed(4))
-    };
-  });
-
-  return {
-    ...next,
-    issues,
-    sources,
-    derived_diagnoses: derivedDiagnoses
-  };
-}
-
-function smoothScoreRecord(
-  previous: NonNullable<MlInferenceOutput['issues'] | MlInferenceOutput['sources']>,
-  next: NonNullable<MlInferenceOutput['issues'] | MlInferenceOutput['sources']>,
-  alpha: number
-) {
-  const previousEntries = previous ?? {};
-  const nextEntries = next ?? {};
-  const keys = new Set([...Object.keys(previousEntries), ...Object.keys(nextEntries)]);
-  const smoothed: Record<string, number> = {};
-
-  keys.forEach((key) => {
-    const previousValue = previousEntries[key] ?? 0;
-    const nextValue = nextEntries[key];
-    const smoothedValue = nextValue !== undefined
-      ? (alpha * nextValue) + ((1 - alpha) * previousValue)
-      : ((1 - alpha) * previousValue);
-
-    if (smoothedValue < CONFIDENCE_DECAY_FLOOR / 2) {
-      return;
-    }
-
-    smoothed[key] = Number(clamp(smoothedValue, 0, 1).toFixed(4));
-  });
-
-  return smoothed;
-}
-
-function deriveStableIssues(
-  problems: DiagnosticProblem[],
-  fallbackIssues: RuleBasedIssue[]
-) {
-  const stableIssues = problems
-    .filter((problem): problem is DiagnosticProblem & { type: RuleBasedIssue } => (
-      (problem.type === 'muddy' || problem.type === 'harsh' || problem.type === 'buried')
-      && problem.confidence >= 0.35
-    ))
-    .map((problem) => problem.type);
-
-  return stableIssues.length > 0 ? stableIssues : fallbackIssues;
 }
 
 function uniqueInOrder<T>(values: T[]) {

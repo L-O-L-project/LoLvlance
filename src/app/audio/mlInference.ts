@@ -1,25 +1,15 @@
 import type {
   AnalysisResult,
-  DetectedAudioSource,
-  DiagnosticProblem,
-  EQRecommendation,
   ExtractedAudioFeatures,
-  ProblemType,
-  RuleBasedIssue,
   SourceLabel,
   TrainableIssueLabel
 } from '../types';
-import { problemCauseMap } from '../data/diagnosticData';
-import { buildMlInferenceOutput } from './diagnosisPostProcessing';
 import {
-  ISSUE_DEFAULT_THRESHOLDS,
   ISSUE_LABELS,
-  ISSUE_PROFILES,
   ML_SCHEMA_VERSION,
-  PRIMARY_UI_ISSUES,
-  SOURCE_DEFAULT_THRESHOLDS,
   SOURCE_LABELS
 } from './mlSchema';
+import { buildMlAnalysisResult, normalizedToFrequency } from './mlPresentation';
 import {
   ENABLE_MODEL,
   getConfiguredModelUrl,
@@ -31,9 +21,6 @@ import ortWasmJsepBinaryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wa
 
 const MODEL_MEL_BIN_COUNT = 64;
 const MODEL_SILENCE_RMS_THRESHOLD = 0.012;
-const MODEL_MIN_HZ = 80;
-const MODEL_MAX_HZ = 8000;
-const MIN_SOURCE_DISPLAY_SCORE = 0.25;
 
 type OrtModule = typeof import('onnxruntime-web');
 
@@ -117,13 +104,13 @@ export async function analyzeWithMlInference(
     });
     const parsedOutputs = parseModelOutputs(outputs);
     logRawModelOutputs(parsedOutputs);
-    const mlOutput = buildMlInferenceOutput(parsedOutputs.issueScores, parsedOutputs.sourceScores);
-    const detectedSources = buildDetectedSources(parsedOutputs.sourceScores);
-    const result = buildAnalysisResult({
-      mlOutput,
-      detectedSources,
-      modelEqFrequencyNormalized: parsedOutputs.modelEqFrequencyNormalized,
-      modelEqGainDb: parsedOutputs.modelEqGainDb
+    const result = buildMlAnalysisResult({
+      issueScores: parsedOutputs.issueScores,
+      sourceScores: parsedOutputs.sourceScores,
+      eq: {
+        frequencyHz: normalizedToFrequency(parsedOutputs.modelEqFrequencyNormalized),
+        gainDb: parsedOutputs.modelEqGainDb
+      }
     });
 
     logMlInference(result.ml_output);
@@ -192,154 +179,6 @@ function parseModelOutputs(
   };
 }
 
-function buildDetectedSources(sourceScores: Record<SourceLabel, number>) {
-  const detected = SOURCE_LABELS
-    .map((source) => ({
-      source,
-      confidence: sourceScores[source],
-      labels: [`model:${source}`]
-    }))
-    .filter((entry) => entry.confidence >= SOURCE_DEFAULT_THRESHOLDS[entry.source] || entry.confidence >= MIN_SOURCE_DISPLAY_SCORE)
-    .sort((left, right) => right.confidence - left.confidence)
-    .map((entry) => ({
-      source: entry.source,
-      confidence: Number(entry.confidence.toFixed(2)),
-      labels: entry.labels
-    })) as DetectedAudioSource[];
-
-  if (detected.length > 0) {
-    return detected;
-  }
-
-  const strongestSource = SOURCE_LABELS
-    .map((source) => ({ source, score: sourceScores[source] }))
-    .sort((left, right) => right.score - left.score)[0];
-
-  if (!strongestSource || strongestSource.score <= 0) {
-    return [];
-  }
-
-  return [{
-    source: strongestSource.source,
-    confidence: Number(strongestSource.score.toFixed(2)),
-    labels: [`model:${strongestSource.source}`]
-  }];
-}
-
-function buildAnalysisResult({
-  mlOutput,
-  detectedSources,
-  modelEqFrequencyNormalized,
-  modelEqGainDb
-}: {
-  mlOutput: ReturnType<typeof buildMlInferenceOutput>;
-  detectedSources: DetectedAudioSource[];
-  modelEqFrequencyNormalized: number;
-  modelEqGainDb: number;
-}): AnalysisResult {
-  const issueProblems = ISSUE_LABELS
-    .filter((label) => (mlOutput.issues[label] ?? 0) >= ISSUE_DEFAULT_THRESHOLDS[label])
-    .sort((left, right) => (mlOutput.issues[right] ?? 0) - (mlOutput.issues[left] ?? 0))
-    .map((label, index) => buildIssueProblem({
-      label,
-      score: mlOutput.issues[label] ?? 0,
-      detectedSources,
-      useModelEq: index === 0,
-      modelEqFrequencyNormalized,
-      modelEqGainDb
-    }));
-  const derivedProblems = Object.entries(mlOutput.derived_diagnoses)
-    .map(([label, diagnosis]) => buildDerivedProblem(label as ProblemType, diagnosis!))
-    .filter((problem): problem is DiagnosticProblem => problem !== null);
-  const eqRecommendations = issueProblems.map((problem) => problem.actions[0] ? buildRecommendationFromProblem(problem) : null)
-    .filter((recommendation): recommendation is EQRecommendation => recommendation !== null);
-  const primaryIssues = issueProblems
-    .map((problem) => problem.type)
-    .filter((type): type is RuleBasedIssue => PRIMARY_UI_ISSUES.includes(type as RuleBasedIssue));
-
-  return {
-    problems: [...issueProblems, ...derivedProblems],
-    issues: primaryIssues,
-    eq_recommendations: eqRecommendations,
-    detectedSources,
-    ml_output: mlOutput,
-    engine: 'ml',
-    timestamp: Date.now()
-  };
-}
-
-function buildIssueProblem({
-  label,
-  score,
-  detectedSources,
-  useModelEq,
-  modelEqFrequencyNormalized,
-  modelEqGainDb
-}: {
-  label: TrainableIssueLabel;
-  score: number;
-  detectedSources: DetectedAudioSource[];
-  useModelEq: boolean;
-  modelEqFrequencyNormalized: number;
-  modelEqGainDb: number;
-}): DiagnosticProblem {
-  const profile = ISSUE_PROFILES[label];
-  const frequencyHz = useModelEq
-    ? normalizedToFrequency(modelEqFrequencyNormalized)
-    : profile.fallbackEq.frequencyHz;
-  const gainDb = useModelEq
-    ? modelEqGainDb
-    : profile.fallbackEq.gainDb;
-  const recommendation = formatRecommendation(frequencyHz, gainDb, profile.fallbackEq.reason);
-  const sources = detectedSources.length > 0 ? detectedSources.map((entry) => entry.source) : ['overall'];
-
-  return {
-    type: label,
-    confidence: Number(score.toFixed(2)),
-    sources,
-    details: profile.details,
-    actions: [`${recommendation.freq_range} ${recommendation.gain}`, recommendation.reason]
-  };
-}
-
-function buildDerivedProblem(label: ProblemType, diagnosis: NonNullable<ReturnType<typeof buildMlInferenceOutput>['derived_diagnoses'][keyof ReturnType<typeof buildMlInferenceOutput>['derived_diagnoses']]>) {
-  if (!diagnosis) {
-    return null;
-  }
-
-  const source = label.split('_')[0] as SourceLabel;
-
-  return {
-    type: label,
-    confidence: Number(diagnosis.score.toFixed(2)),
-    sources: [source],
-    details: problemCauseMap[label] ?? [],
-    actions: diagnosis.explanation ? [diagnosis.explanation] : diagnosis.reasons
-  };
-}
-
-function buildRecommendationFromProblem(problem: DiagnosticProblem): EQRecommendation | null {
-  const action = problem.actions[0];
-  if (!action) {
-    return null;
-  }
-
-  const [freq_range, gain] = action.split(' ');
-  return {
-    freq_range,
-    gain,
-    reason: problem.actions[1] ?? 'model-driven recommendation'
-  };
-}
-
-function formatRecommendation(centerFrequencyHz: number, gainDb: number, reason: string): EQRecommendation {
-  return {
-    freq_range: formatEqRange(centerFrequencyHz),
-    gain: formatGain(gainDb),
-    reason
-  };
-}
-
 function readTensorData(value: unknown, outputName: string, expectedLength?: number) {
   if (!value || typeof value !== 'object' || !('data' in value)) {
     throw new Error(`Missing tensor output: ${outputName}`);
@@ -368,34 +207,6 @@ function readScalar(value: unknown, outputName: string) {
   }
 
   return scalar;
-}
-
-function normalizedToFrequency(value: number) {
-  const clamped = clamp(value, 0, 1);
-  return MODEL_MIN_HZ * ((MODEL_MAX_HZ / MODEL_MIN_HZ) ** clamped);
-}
-
-function formatEqRange(centerFrequencyHz: number) {
-  const lower = roundFrequency(centerFrequencyHz / Math.SQRT2);
-  const upper = roundFrequency(centerFrequencyHz * Math.SQRT2);
-  return `${lower}-${upper}Hz`;
-}
-
-function roundFrequency(value: number) {
-  if (value < 200) {
-    return Math.max(20, Math.round(value / 5) * 5);
-  }
-
-  if (value < 1000) {
-    return Math.round(value / 10) * 10;
-  }
-
-  return Math.round(value / 50) * 50;
-}
-
-function formatGain(gainDb: number) {
-  const rounded = Math.round(gainDb * 10) / 10;
-  return `${rounded > 0 ? '+' : ''}${rounded.toFixed(Math.abs(rounded % 1) < 0.05 ? 0 : 1)}dB`;
 }
 
 function clamp(value: number, min: number, max: number) {

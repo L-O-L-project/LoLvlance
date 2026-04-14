@@ -134,6 +134,12 @@ export interface DerivedDiagnosisResult {
   explanation?: string;
 }
 
+export interface MlEqRuntimeOutput {
+  frequency_normalized: number;
+  frequency_hz: number;
+  gain_db: number;
+}
+
 export interface MlInferenceOutput {
   schema_version: string;
   issues: Partial<Record<TrainableIssueLabel, number>>;
@@ -142,6 +148,57 @@ export interface MlInferenceOutput {
   metadata: {
     thresholds_used: Record<string, number>;
     label_quality: Partial<Record<TrainableIssueLabel | SourceLabel | DerivedDiagnosisType, LabelQuality>>;
+    model_eq?: MlEqRuntimeOutput;
+  };
+}
+
+export interface MonitoringIssueDecision {
+  label: TrainableIssueLabel;
+  previousState: boolean;
+  nextState: boolean;
+  smoothedProbability: number;
+  reason: 'initial_on' | 'initial_off' | 'switch_on' | 'switch_off' | 'hold';
+}
+
+export interface MonitoringSourceDecision {
+  previousSource: SourceLabel | null;
+  candidateSource: SourceLabel | null;
+  nextSource: SourceLabel | null;
+  previousProbability: number | null;
+  candidateProbability: number | null;
+  margin: number;
+  reason: 'initial' | 'retain' | 'switch' | 'empty';
+}
+
+export interface MonitoringEqDecision {
+  previousValue: number | null;
+  smoothedValue: number | null;
+  displayedValue: number | null;
+  delta: number | null;
+  threshold: number;
+  reason: 'initial' | 'updated' | 'suppressed' | 'missing';
+}
+
+export interface MonitoringStabilizationDebug {
+  inferenceTimestamp: number;
+  displayCommitted: boolean;
+  rawIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  rawSourceProbs: Partial<Record<SourceLabel, number>>;
+  rawEqFreqHz: number | null;
+  rawEqGainDb: number | null;
+  smoothedIssueProbs: Partial<Record<TrainableIssueLabel, number>>;
+  smoothedSourceProbs: Partial<Record<SourceLabel, number>>;
+  smoothedEqFreqHz: number | null;
+  smoothedEqGainDb: number | null;
+  displayedIssueState: Record<TrainableIssueLabel, boolean>;
+  displayedSourceState: SourceLabel | null;
+  displayedEqFreqHz: number | null;
+  displayedEqGainDb: number | null;
+  issueDecisions: MonitoringIssueDecision[];
+  sourceDecision: MonitoringSourceDecision | null;
+  eqDecisions: {
+    freq: MonitoringEqDecision;
+    gain: MonitoringEqDecision;
   };
 }
 
@@ -178,6 +235,7 @@ export interface AnalysisResult {
   stemService?: StemServiceStatus;
   sourceEqRecommendations?: SourceEqRecommendation[];
   ml_output?: MlInferenceOutput;
+  monitoringStabilization?: MonitoringStabilizationDebug;
   engine?: AnalysisEngine;
   timestamp?: number;
 }
