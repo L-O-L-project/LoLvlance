@@ -62,3 +62,12 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+# ML — raw datasets (재다운로드: python ml/download_datasets.py)
+data/
+
+# ML — 학습 체크포인트 (재학습으로 재현 가능)
+ml/checkpoints/*.pt
+
+# ML — 합성 데이터 (재생성: python ml/generate_synthetic_public_datasets.py)
+ml/artifacts/synthetic_public_datasets/
