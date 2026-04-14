@@ -30,6 +30,7 @@ Korean version: `ML_README.ko.md`
 - The browser runtime analyzes a rolling `3.0` second window.
 - Monitoring passes run on a `1.0` second stride in `src/app/hooks/useMonitoring.ts`.
 - The active runtime model is isolated as `v0.0-pipeline-check`.
+- The reserved production version tag is `v0.1-real-data`.
 - Product positioning should remain continuous monitoring and live session analysis, not instant-response AI.
 
 <a id="model-architecture"></a>

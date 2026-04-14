@@ -113,6 +113,7 @@ LoLvlance now has an explicit model isolation layer.
 ### Current Runtime Defaults
 
 - active default model version: `v0.0-pipeline-check`
+- reserved production version: `v0.1-real-data`
 - config file: `src/app/config/modelRuntime.ts`
 - default browser model path: `public/models/lightweight_audio_model.onnx`
 - reserved production path: `public/models/lightweight_audio_model.production.onnx`
@@ -143,7 +144,8 @@ Behavior:
 
 - if `ENABLE_MODEL=false`, browser ML is skipped and the app uses fallback analysis only
 - if `MODEL_VERSION === "v0.0-pipeline-check"`, the experimental model path is used
-- otherwise, the runtime can route to a future production model artifact
+- if `MODEL_VERSION === "v0.1-real-data"`, the production model path is used
+- other non-experimental version strings also route to the production model path
 
 ### UI Status
 
@@ -487,11 +489,18 @@ After download, the script prints the exact `ml/train.py` command to run.
 ### Train on Real Audio
 
 ```bash
-python -m ml.train \
-  --audio-root data/datasets/musan \
-  --musan-root data/datasets/musan \
-  --rebuild-manifest --epochs 20 --export-onnx
+python ml/train_real_data_checkpoint.py \
+  --download-missing \
+  --include-fsd50k \
+  --include-openmic \
+  --promote-browser-model
 ```
+
+Notes:
+
+- this path is intended for the `v0.1-real-data` promotion flow
+- public dataset download and extraction need substantial free disk; plan for roughly `60 GB` before enabling `--download-missing`
+- the script still runs the existing `ml.train` and `ml/eval/evaluate.py` pipeline; it does not change the model architecture or ONNX schema
 
 ### Collect and Ingest User Feedback
 

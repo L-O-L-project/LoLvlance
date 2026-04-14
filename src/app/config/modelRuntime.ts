@@ -1,4 +1,5 @@
 const DEFAULT_EXPERIMENTAL_MODEL_VERSION = 'v0.0-pipeline-check';
+const DEFAULT_PRODUCTION_MODEL_VERSION = 'v0.1-real-data';
 const DEFAULT_EXPERIMENTAL_MODEL_PATH = 'models/lightweight_audio_model.onnx';
 const DEFAULT_PRODUCTION_MODEL_PATH = 'models/lightweight_audio_model.production.onnx';
 
@@ -22,6 +23,9 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean) {
 }
 
 export const EXPERIMENTAL_MODEL_VERSION = DEFAULT_EXPERIMENTAL_MODEL_VERSION;
+export const PRODUCTION_MODEL_VERSION =
+  normalizeEnvValue(import.meta.env.VITE_PRODUCTION_MODEL_VERSION as string | undefined)
+  ?? DEFAULT_PRODUCTION_MODEL_VERSION;
 export const MODEL_VERSION =
   normalizeEnvValue(import.meta.env.VITE_MODEL_VERSION as string | undefined)
   ?? EXPERIMENTAL_MODEL_VERSION;
@@ -39,6 +43,10 @@ const PRODUCTION_MODEL_PATH =
 
 export function isExperimentalModelVersion(modelVersion = MODEL_VERSION) {
   return modelVersion === EXPERIMENTAL_MODEL_VERSION;
+}
+
+export function isProductionModelVersion(modelVersion = MODEL_VERSION) {
+  return modelVersion === PRODUCTION_MODEL_VERSION;
 }
 
 export function getConfiguredModelPath(modelVersion = MODEL_VERSION) {
@@ -60,6 +68,7 @@ export function getModelRuntimeSnapshot(modelVersion = MODEL_VERSION) {
     enabled: ENABLE_MODEL,
     modelVersion,
     experimental: isExperimentalModelVersion(modelVersion),
+    production: isProductionModelVersion(modelVersion),
     modelPath: getConfiguredModelPath(modelVersion)
   };
 }

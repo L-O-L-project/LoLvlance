@@ -158,6 +158,7 @@ The browser now has a model isolation layer.
 ### Runtime Defaults
 
 - default experimental version: `v0.0-pipeline-check`
+- reserved production version: `v0.1-real-data`
 - default experimental model path: `public/models/lightweight_audio_model.onnx`
 - reserved production path: `public/models/lightweight_audio_model.production.onnx`
 
@@ -174,7 +175,8 @@ Behavior:
 
 - `ENABLE_MODEL=false` disables ML inference entirely
 - `MODEL_VERSION === "v0.0-pipeline-check"` routes to the experimental model artifact
-- any future production version can route to the production artifact path
+- `MODEL_VERSION === "v0.1-real-data"` routes to the production artifact path
+- any other non-experimental version can also route to the production artifact path
 
 ### User-Facing Safety Layer
 
