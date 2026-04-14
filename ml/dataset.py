@@ -166,6 +166,10 @@ def scan_dataset_root(
         return []
 
     csv_annotations = load_source_annotations_from_csv(root)
+    musan_music_annotations: dict[str, tuple[set[str], bool]] | None = None
+
+    if dataset_name == "musan":
+        musan_music_annotations = load_musan_music_annotations(root)
 
     if dataset_name == "slakh":
         audio_files = [
@@ -192,6 +196,10 @@ def scan_dataset_root(
         if dataset_name == "slakh":
             stem_dir = audio_path.parent / "stems"
             stem_paths = collect_audio_files(stem_dir) if stem_dir.exists() else []
+
+        if dataset_name == "musan":
+            musan_annotation = infer_musan_source_annotation(audio_path, musan_music_annotations)
+            csv_annotation = csv_annotation.merge(musan_annotation)
 
         entries.extend(
             build_entries_for_file(
@@ -423,6 +431,100 @@ def load_manifest(manifest_path: str | Path) -> list[dict]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
+# OpenMIC-2018 instrument name → our SOURCE_LABELS mapping
+_OPENMIC_INSTRUMENT_TO_SOURCE: dict[str, str] = {
+    "voice": "vocal",
+    "guitar": "guitar",
+    "banjo": "guitar",
+    "mandolin": "guitar",
+    "ukulele": "guitar",
+    "bass": "bass",
+    "drums": "drums",
+    "cymbals": "drums",
+    "piano": "keys",
+    "organ": "keys",
+    "synthesizer": "keys",
+}
+# All 20 OpenMIC instruments — used to set mask=1 for known-absent sources
+_OPENMIC_ALL_INSTRUMENTS: frozenset[str] = frozenset([
+    "accordion", "banjo", "bass", "cello", "clarinet", "cymbals", "drums",
+    "flute", "guitar", "mallet_percussion", "mandolin", "organ", "piano",
+    "saxophone", "synthesizer", "trombone", "trumpet", "ukulele", "violin", "voice",
+])
+_OPENMIC_RELEVANCE_THRESHOLD = 0.5
+
+
+def _is_openmic_longformat_csv(fieldnames: list[str]) -> bool:
+    lowered = {f.lower() for f in fieldnames}
+    return {"sample_key", "instrument", "relevance"}.issubset(lowered)
+
+
+def _parse_openmic_longformat_csv(csv_path: Path) -> dict[str, SourceAnnotation]:
+    """Parse OpenMIC-2018 aggregated-labels CSV (long format).
+
+    Each row: sample_key, instrument, relevance, num_responses
+    We collect all rows per sample_key, then build a SourceAnnotation that:
+    - sets mask=1.0 for every SOURCE_LABEL that has at least one observed row
+    - sets value=1.0 for labels above the relevance threshold
+    """
+    # Accumulate per sample: {sample_key: {source_label: max_relevance}}
+    sample_source_relevance: dict[str, dict[str, float]] = {}
+    # Track which source labels were actually observed (have any row) per sample
+    sample_observed: dict[str, set[str]] = {}
+
+    with csv_path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            raw_key = row.get("sample_key", "").strip()
+            instrument = row.get("instrument", "").strip().lower().replace("-", "_").replace(" ", "_")
+            try:
+                relevance = float(row.get("relevance", 0.0))
+            except ValueError:
+                relevance = 0.0
+
+            if not raw_key or not instrument:
+                continue
+
+            clip_id = normalize_clip_id(raw_key)
+            source_label = _OPENMIC_INSTRUMENT_TO_SOURCE.get(instrument)
+
+            if clip_id not in sample_source_relevance:
+                sample_source_relevance[clip_id] = {}
+                sample_observed[clip_id] = set()
+
+            # Track which source labels we have any observation for
+            if source_label:
+                sample_observed[clip_id].add(source_label)
+                prev = sample_source_relevance[clip_id].get(source_label, 0.0)
+                sample_source_relevance[clip_id][source_label] = max(prev, relevance)
+
+            # Any OpenMIC instrument row means we have full coverage for this sample
+            # (OpenMIC annotates all 20 instruments per sample)
+            if instrument in _OPENMIC_ALL_INSTRUMENTS:
+                for sl in SOURCE_LABELS:
+                    sample_observed[clip_id].add(sl)
+
+    annotations: dict[str, SourceAnnotation] = {}
+    for clip_id, relevance_map in sample_source_relevance.items():
+        annotation = SourceAnnotation.empty()
+        annotation.support = "csv_structured"
+        observed = sample_observed.get(clip_id, set())
+
+        for source_label in SOURCE_LABELS:
+            if source_label not in observed:
+                continue
+            annotation.mask[source_label] = 1.0
+            annotation.quality[source_label] = SOURCE_LABEL_QUALITY
+            rel = relevance_map.get(source_label, 0.0)
+            annotation.values[source_label] = 1.0 if rel >= _OPENMIC_RELEVANCE_THRESHOLD else 0.0
+            if annotation.values[source_label] > 0:
+                annotation.evidence[source_label] = [f"openmic_relevance={rel:.2f}"]
+
+        annotations[clip_id] = annotation
+
+    return annotations
+
+
 def load_source_annotations_from_csv(root: Path) -> dict[str, SourceAnnotation]:
     annotations: dict[str, SourceAnnotation] = {}
 
@@ -431,6 +533,12 @@ def load_source_annotations_from_csv(root: Path) -> dict[str, SourceAnnotation]:
             with csv_path.open("r", encoding="utf-8") as handle:
                 reader = csv.DictReader(handle)
                 if not reader.fieldnames:
+                    continue
+
+                # OpenMIC-2018 long-format CSV
+                if _is_openmic_longformat_csv(list(reader.fieldnames)):
+                    for clip_id, annotation in _parse_openmic_longformat_csv(csv_path).items():
+                        annotations[clip_id] = annotations.get(clip_id, SourceAnnotation.empty()).merge(annotation)
                     continue
 
                 fieldnames = [field.lower() for field in reader.fieldnames]
@@ -503,6 +611,155 @@ def load_source_annotations_from_csv(root: Path) -> dict[str, SourceAnnotation]:
             continue
 
     return annotations
+
+
+# MUSAN music genre → source presence signals.
+# Sources listed here get mask=1; value=1.0 means "present", 0.0 means "absent".
+# Sources NOT listed get mask=0 (unknown).
+_MUSAN_GENRE_PRESENT: dict[str, set[str]] = {
+    "blues":       {"guitar", "bass", "drums"},
+    "pop":         {"guitar", "bass", "drums"},
+    "rock":        {"guitar", "bass", "drums"},
+    "metal":       {"guitar", "bass", "drums"},
+    "indierock":   {"guitar", "bass", "drums"},
+    "country":     {"guitar", "bass", "drums"},
+    "folk":        {"guitar"},
+    "funk":        {"guitar", "bass", "drums"},
+    "jazz":        {"guitar", "bass", "drums", "keys"},
+    "hiphop":      {"drums", "bass"},
+    "rap":         {"drums", "bass"},
+    "electronica": {"keys", "bass", "drums"},
+    "dance":       {"keys", "bass", "drums"},
+    "gospel":      {"keys", "bass", "drums"},
+    "soul":        {"keys", "guitar", "bass", "drums"},
+    "rnb":         {"keys", "bass", "drums"},
+    "latin":       {"keys", "bass", "drums"},
+    "baroque":     {"keys"},
+    "westernart":  {"keys"},
+    "romantic":    {"keys"},
+    "classical":   {"keys"},
+    "adventure":   {"keys"},
+    "mondernist":  {"keys"},
+}
+# Sources that are definitively absent for a genre (e.g. classical has no drum kit)
+_MUSAN_GENRE_ABSENT: dict[str, set[str]] = {
+    "baroque":    {"guitar", "bass", "drums"},
+    "westernart": {"guitar", "bass", "drums"},
+    "romantic":   {"guitar", "bass", "drums"},
+    "classical":  {"guitar", "bass", "drums"},
+    "adventure":  {"guitar", "bass", "drums"},
+    "mondernist": {"guitar", "bass", "drums"},
+}
+
+
+def load_musan_music_annotations(musan_root: Path) -> dict[str, tuple[set[str], bool]]:
+    """Load per-file annotations from MUSAN music/*/ANNOTATIONS files.
+
+    Returns a dict mapping normalised stem → (genre_set, vocal_present).
+    ANNOTATIONS line format: ``filename genre1[,genre2] Y|N artist [composer]``
+    """
+    result: dict[str, tuple[set[str], bool]] = {}
+    music_root = musan_root / "music"
+
+    if not music_root.exists():
+        return result
+
+    for annotations_path in sorted(music_root.rglob("ANNOTATIONS")):
+        try:
+            with annotations_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.strip().split()
+                    if len(parts) < 3:
+                        continue
+                    stem = normalize_clip_id(parts[0])
+                    genres: set[str] = {g.strip().lower() for g in parts[1].split(",") if g.strip()}
+                    vocal_present = parts[2].strip().upper() == "Y"
+                    result[stem] = (genres, vocal_present)
+        except (OSError, UnicodeDecodeError):
+            continue
+
+    return result
+
+
+def infer_musan_source_annotation(
+    audio_path: Path,
+    musan_annotations: dict[str, tuple[set[str], bool]] | None = None,
+) -> SourceAnnotation:
+    """MUSAN uses a 3-tier directory structure to signal content type.
+
+    musan/speech/* → pure vocal; all other sources definitely absent
+    musan/noise/*  → non-musical; all sources definitely absent
+    musan/music/*  → use per-file ANNOTATIONS (genre + vocal flag) when available
+    """
+    annotation = SourceAnnotation.empty()
+    parts_lower = {p.lower() for p in audio_path.parts}
+
+    if "speech" in parts_lower:
+        # We know: vocal present, no instruments
+        for label in SOURCE_LABELS:
+            annotation.mask[label] = 1.0
+            annotation.quality[label] = SOURCE_LABEL_QUALITY
+            annotation.values[label] = 1.0 if label == "vocal" else 0.0
+        annotation.support = "filename_partial"
+        annotation.evidence["vocal"] = ["musan/speech"]
+        return annotation
+
+    if "noise" in parts_lower:
+        # We know: no musical sources at all
+        for label in SOURCE_LABELS:
+            annotation.mask[label] = 1.0
+            annotation.quality[label] = SOURCE_LABEL_QUALITY
+            annotation.values[label] = 0.0
+        annotation.support = "filename_partial"
+        return annotation
+
+    # music/ path — try to use per-file ANNOTATIONS data
+    if musan_annotations is None or "music" not in parts_lower:
+        return annotation  # mask=0, fully unknown
+
+    stem = normalize_clip_id(audio_path)
+    entry = musan_annotations.get(stem)
+
+    if entry is None:
+        return annotation  # no ANNOTATIONS entry found, leave unknown
+
+    genres, vocal_present = entry
+
+    # Collect which sources are clearly present or absent across all genres
+    confirmed_present: set[str] = set()
+    confirmed_absent: set[str] = set()
+
+    for genre in genres:
+        confirmed_present.update(_MUSAN_GENRE_PRESENT.get(genre, set()))
+        confirmed_absent.update(_MUSAN_GENRE_ABSENT.get(genre, set()))
+
+    # A source is only absent if confirmed absent by all genres AND never present
+    truly_absent = confirmed_absent - confirmed_present
+
+    # Vocal: always from the explicit Y/N flag
+    annotation.mask["vocal"] = 1.0
+    annotation.quality["vocal"] = SOURCE_LABEL_QUALITY
+    annotation.values["vocal"] = 1.0 if vocal_present else 0.0
+    if vocal_present:
+        annotation.evidence["vocal"] = ["musan_annotation:vocal_Y"]
+
+    # Instrument sources
+    for label in SOURCE_LABELS:
+        if label == "vocal":
+            continue
+        if label in confirmed_present:
+            annotation.mask[label] = 1.0
+            annotation.quality[label] = SOURCE_LABEL_QUALITY
+            annotation.values[label] = 1.0
+            annotation.evidence[label] = [f"musan_genre:{','.join(sorted(genres))}"]
+        elif label in truly_absent:
+            annotation.mask[label] = 1.0
+            annotation.quality[label] = SOURCE_LABEL_QUALITY
+            annotation.values[label] = 0.0
+        # else: mask stays 0 (unknown)
+
+    annotation.support = "csv_structured"
+    return annotation
 
 
 def infer_source_annotation_from_path(audio_path: Path, support: str) -> SourceAnnotation:
