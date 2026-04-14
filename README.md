@@ -1,28 +1,27 @@
 # LoLvlance
 
-LoLvlance is a browser-based audio monitoring system focused on one product goal:
+LoLvlance is a browser-based audio monitoring system for church sound teams, worship volunteers, and small live setups.
 
-**continuous sound issue detection + EQ guidance for live sessions**
+The current product goal is simple:
 
-The current implementation captures microphone audio in the browser, extracts audio features locally, runs a lightweight ONNX model in-browser, and combines ML outputs with deterministic rules to produce issue labels, source context, and suggested EQ moves.
+**continuous monitoring + issue guidance + first-step EQ suggestions during a live session**
 
-In the current browser flow, LoLvlance analyzes a rolling `~3` second window and refreshes guidance about every `~4` seconds. It is best understood as continuous monitoring for worship teams, church sound volunteers, and small live setups that need practical guidance during a session.
+LoLvlance listens to microphone audio in the browser, analyzes a rolling audio window, updates guidance every few seconds, and helps the user decide what to check next. It is an assistive system, not an authority system.
 
 ## Quick Links
 
-[![Overview](https://img.shields.io/badge/Project%20Overview-2563EB?style=for-the-badge&logo=bookstack&logoColor=white)](#project-overview)
-[![Architecture](https://img.shields.io/badge/System%20Architecture-7C3AED?style=for-the-badge&logo=appveyor&logoColor=white)](#system-architecture)
-[![ML Status](https://img.shields.io/badge/Current%20ML%20Status-DC2626?style=for-the-badge&logo=pytorch&logoColor=white)](#current-ml-status)
-[![Schema](https://img.shields.io/badge/Model%20Output%20Schema-0891B2?style=for-the-badge&logo=onnx&logoColor=white)](#model-output-schema)
-
-[![Folders](https://img.shields.io/badge/Folder%20Structure-0F766E?style=for-the-badge&logo=files&logoColor=white)](#folder-structure)
-[![Run](https://img.shields.io/badge/How%20to%20Run-16A34A?style=for-the-badge&logo=vite&logoColor=white)](#how-to-run)
-[![Limits](https://img.shields.io/badge/Known%20Limitations-D97706?style=for-the-badge&logo=target&logoColor=white)](#known-limitations)
-[![Roadmap](https://img.shields.io/badge/Next%20Steps-1D4ED8?style=for-the-badge&logo=roadmapdotsh&logoColor=white)](#next-steps)
+[![Project Overview](https://img.shields.io/badge/Project%20Overview-2563EB?style=for-the-badge&logo=bookstack&logoColor=white)](#project-overview)
+[![System Architecture](https://img.shields.io/badge/System%20Architecture-7C3AED?style=for-the-badge&logo=appveyor&logoColor=white)](#system-architecture)
+[![Model Versioning](https://img.shields.io/badge/Model%20Versioning-DC2626?style=for-the-badge&logo=onnx&logoColor=white)](#model-versioning)
+[![Monitoring](https://img.shields.io/badge/Monitoring%20System-0891B2?style=for-the-badge&logo=webaudio&logoColor=white)](#monitoring-system)
+[![Evaluation](https://img.shields.io/badge/Evaluation%20System-0F766E?style=for-the-badge&logo=githubactions&logoColor=white)](#evaluation-system)
+[![Tests](https://img.shields.io/badge/Test%20Infrastructure-D97706?style=for-the-badge&logo=pytest&logoColor=white)](#test-infrastructure)
+[![Workflow](https://img.shields.io/badge/Development%20Workflow-16A34A?style=for-the-badge&logo=vite&logoColor=white)](#development-workflow)
+[![Roadmap](https://img.shields.io/badge/Roadmap-1D4ED8?style=for-the-badge&logo=roadmapdotsh&logoColor=white)](#roadmap)
 
 [![Korean README](https://img.shields.io/badge/Korean-README-111827?style=for-the-badge&logo=readme&logoColor=white)](README.ko.md)
 [![Developer Handover](https://img.shields.io/badge/Developer-Handover-111827?style=for-the-badge&logo=gitbook&logoColor=white)](HANDOVER.md)
-[![ML Docs](https://img.shields.io/badge/ML-README-111827?style=for-the-badge&logo=pytorch&logoColor=white)](ML_README.md)
+[![ML README](https://img.shields.io/badge/ML-README-111827?style=for-the-badge&logo=pytorch&logoColor=white)](ML_README.md)
 
 ## Language Versions
 
@@ -38,20 +37,33 @@ In the current browser flow, LoLvlance analyzes a rolling `~3` second window and
 <a id="project-overview"></a>
 ## 1. Project Overview
 
-LoLvlance is designed to help users answer three questions during a live session:
+LoLvlance is designed to help users answer three questions during a session:
 
-1. What sounds wrong in the signal?
+1. What sounds off right now?
 2. Which source is most likely involved?
 3. What EQ move should the user try first?
 
-Today, those responsibilities are split across ML and rules:
+The intended user is not a full-time mix engineer. The product is aimed at people running sound while also doing other jobs, especially church teams and small live crews that need practical guidance under time pressure.
 
-- **ML** predicts issue probabilities and source probabilities.
-- **Rules** derive source-specific diagnoses, map predictions into EQ suggestions, and provide a fallback path when ML is unavailable.
+### Product Positioning
 
-The current experience is assistive rather than authoritative. LoLvlance is meant to help users decide what to check next, not to claim a perfect diagnosis.
+- LoLvlance is **continuous monitoring**, not instant-response analysis.
+- The system analyzes a rolling audio window and updates guidance every few seconds.
+- The output should be treated as **assistive guidance**, not as a guaranteed diagnosis.
 
-This is a browser-first system. There is no cloud inference path and there is no production data collection pipeline yet.
+### What the Product Does Today
+
+- captures microphone audio in the browser
+- maintains a rolling analysis buffer
+- extracts audio features locally
+- runs an ONNX model locally when enabled
+- merges ML output with rule-based diagnostics, source detection, and EQ guidance
+
+### What the Product Does Not Claim
+
+- it is not a production-grade AI diagnosis system yet
+- it is not a fully learned EQ system in the browser path
+- it does not provide sub-second response guarantees
 
 <a id="system-architecture"></a>
 ## 2. System Architecture
@@ -60,191 +72,363 @@ This is a browser-first system. There is no cloud inference path and there is no
 
 ```text
 Mic Input
-  -> Browser Rolling Buffer
+  -> Browser Audio Capture
+  -> Native Rolling Buffer + Resampled Rolling Buffer
   -> Feature Extraction
-  -> ONNX Inference
-  -> Diagnosis Post-Processing
-  -> Rule / EQ Layer
+  -> ONNX Inference (optional)
+  -> Source Enrichment / Rule Fallback
+  -> EMA Smoothing
   -> UI
 ```
 
 ### Runtime Responsibilities
 
 - `src/app/hooks/useMonitoring.ts`
-  Orchestrates microphone capture, rolling buffers, ML inference, stem service calls, fallback source tagging, and final UI result assembly.
+  Main runtime orchestrator for microphone capture, rolling buffers, inference scheduling, smoothing, stem service enrichment, and UI updates.
+- `src/app/audio/audioUtils.ts`
+  Buffer utilities, resampling helpers, buffered snapshot creation, and related audio math.
 - `src/app/audio/featureExtraction.ts`
-  Converts buffered audio into log-mel spectrogram features plus RMS and related metadata.
+  Frontend feature extraction from buffered audio.
 - `src/app/audio/mlInference.ts`
-  Loads `public/models/lightweight_audio_model.onnx` with `onnxruntime-web`, reads the new schema directly, and converts raw tensors into frontend ML output.
+  Browser ONNX loading, output parsing, model-version-aware logging, and ML fallback behavior.
 - `src/app/audio/diagnosisPostProcessing.ts`
-  Derives source-specific diagnoses such as `vocal_buried` from issue and source probabilities.
+  Derived diagnoses such as `vocal_buried` and other schema-level post-processing.
 - `src/app/audio/sourceAwareEq.ts`
-  Produces source-aware EQ recommendations using detected sources and optional stem metrics.
+  Human-readable EQ guidance.
 - `src/app/audio/ruleBasedAnalysis.ts`
-  Provides the fallback rule engine for basic issue detection if browser ML fails.
+  Deterministic fallback issue analysis when ML is disabled or unavailable.
 
-### ML Role vs Rule Role
+### Runtime Split of Responsibilities
 
-- **ML role**
-  Predict `issue_probs` and `source_probs` from log-mel spectrogram input.
-- **Rule role**
-  Handle silence gating, derive higher-level diagnoses, project EQ guidance, merge source detections, and recover gracefully if ML is unavailable.
+- **ML**
+  Estimates issue probabilities and source probabilities from log-mel input.
+- **Rules and post-processing**
+  Handle silence gating, interpret predictions, merge source evidence, stabilize outputs, and generate user-facing guidance.
 
-### Current Monitoring Cadence
+<a id="model-versioning"></a>
+## 3. Model Versioning
 
-- Browser analysis window: about `3.0` seconds
-- Monitoring update cadence: about every `4` seconds
-- Product interpretation: continuous monitoring and live session analysis, not instant-response diagnosis
+LoLvlance now has an explicit model isolation layer.
 
-<a id="current-ml-status"></a>
-## 3. Current ML Status
+### Current Runtime Defaults
 
-This section is intentionally explicit because it matters for anyone evaluating the current system.
+- active default model version: `v0.0-pipeline-check`
+- config file: `src/app/config/modelRuntime.ts`
+- default browser model path: `public/models/lightweight_audio_model.onnx`
+- reserved production path: `public/models/lightweight_audio_model.production.onnx`
 
-- The current checkpoint is trained on a **synthetic fallback dataset**, not on real public datasets.
-- The synthetic dataset was generated by `ml/generate_synthetic_public_datasets.py`.
-- The current manifest at `ml/artifacts/public_dataset_manifest.jsonl` contains **44 clips** total:
-  - `22` train
-  - `22` validation
-- The current checkpoint exists to **validate the pipeline**, not to represent production model quality.
-- Browser inference is working end-to-end, but semantic accuracy is still weak on real-world voice and music.
-- Source predictions are especially sensitive to the synthetic dataset bias.
+### Current Model Status
 
-In short: the infrastructure is real, the checkpoint is not production-grade.
-
-<a id="model-output-schema"></a>
-## 4. Model Output Schema
-
-The frontend now expects this schema directly from ONNX:
-
-| Output | Shape | Meaning |
-| --- | --- | --- |
-| `issue_probs` | `(1, 9)` | Multi-label issue probabilities |
-| `source_probs` | `(1, 5)` | Multi-label source probabilities |
-| `eq_freq` | `(1, 1)` | Normalized EQ target frequency |
-| `eq_gain_db` | `(1, 1)` | Suggested EQ gain in dB |
-
-### Label Order
-
-Issue index order:
+The active browser model is intentionally marked as:
 
 ```text
-[muddy, harsh, buried, boomy, thin, boxy, nasal, sibilant, dull]
+v0.0-pipeline-check
 ```
 
-Source index order:
+This means:
+
+- it is a pipeline-validation artifact
+- it is not production-ready
+- it was trained on synthetic data with known bias issues
+- its outputs may be inaccurate on real voice and music
+
+### Kill Switch and Routing
+
+The frontend runtime supports:
+
+- `MODEL_VERSION`
+- `ENABLE_MODEL`
+
+Behavior:
+
+- if `ENABLE_MODEL=false`, browser ML is skipped and the app uses fallback analysis only
+- if `MODEL_VERSION === "v0.0-pipeline-check"`, the experimental model path is used
+- otherwise, the runtime can route to a future production model artifact
+
+### UI Status
+
+The current UI explicitly warns when the experimental model is active:
+
+- `Experimental Mode`
+- `Not production-ready`
+- `Results may be inaccurate`
+
+<a id="ml-system"></a>
+## 4. ML System
+
+There are now two different ways to think about the ML system:
+
+### Active Browser Runtime
+
+The browser currently serves an **experimental checkpoint** and consumes a compatibility ONNX contract:
+
+- `issue_probs`
+- `source_probs`
+- `eq_freq`
+- `eq_gain_db`
+
+That runtime path is isolated for safety and should not be treated as production AI.
+
+### Python Training Path
+
+The Python-side ML system has evolved beyond the original two-head CNN prototype.
+
+Current code supports:
+
+- teacher/student model variants in `ml/model.py`
+- a transformer-style spectrogram encoder for the teacher path
+- a lightweight CNN encoder for the student path
+- source-conditioned issue prediction
+- a learned multi-band EQ head producing `eq_params`
+- self-supervised degradation training in `ml/degradation.py`
+- distillation-ready losses in `ml/losses.py`
+
+### Important Distinction
+
+The training code is ahead of the active browser model.
+
+Today:
+
+- the **codebase** supports a more capable learning-based path
+- the **active browser checkpoint** is still `v0.0-pipeline-check`
+- the **runtime product claim** must therefore stay conservative
+
+<a id="audio-pipeline"></a>
+## 5. Audio Pipeline
+
+### Browser Audio Path
+
+The browser monitoring path now uses continuous capture rather than isolated fixed windows.
+
+The main pieces are:
+
+- microphone capture through `AudioWorklet` when available
+- `ScriptProcessorNode` fallback when needed
+- native-sample-rate rolling buffer for source/stem paths
+- resampled `16 kHz` rolling buffer for ML feature extraction
+
+### Preprocessing Contract
+
+The current preprocessing contract is still:
+
+- sample rate: `16_000`
+- clip window: `3.0` seconds
+- window size: `25 ms`
+- hop size: `10 ms`
+- FFT size: `512`
+- mel bins: `64`
+
+### Input Integrity Note
+
+A test suite now exists to validate that browser-side preprocessing and Python-side preprocessing stay aligned.
+
+That suite covers:
+
+- waveform parity
+- feature parity
+- resampler consistency
+- manifest leakage safety
+
+The existence of these tests does **not** mean preprocessing consistency can be assumed forever. They are release safeguards and should stay green.
+
+<a id="monitoring-system"></a>
+## 6. Monitoring System
+
+The monitoring system no longer uses the old "capture 3 seconds, wait, repeat" pattern.
+
+### Current Monitoring Behavior
+
+- analysis window: `3.0` seconds
+- inference stride: `1.0` second
+- smoothing: EMA with `alpha = 0.3`
+- initial minimum buffer before analysis: `750 ms`
+
+### What Changed
+
+The runtime now keeps a **rolling buffer** and re-analyzes the most recent `3.0` seconds on a fixed stride.
+
+That means:
+
+- there is no intentional blind gap between analysis passes
+- each pass covers the latest available audio
+- the UI is updated on a rolling basis rather than in isolated chunks
+
+### Why This Matters
+
+The old fixed-window/cadence mismatch created unanalyzed audio gaps.
+
+The current design fixes that by separating:
+
+- **continuous capture**
+- **interval-based inference**
+
+This keeps coverage continuous without blocking the audio capture path.
+
+### Output Stabilization
+
+To reduce flicker, the runtime applies EMA smoothing to:
+
+- issue confidences
+- detected source confidences
+- source EQ recommendations
+- raw ML-derived diagnosis scores
+
+### Edge Cases
+
+The monitoring runtime explicitly handles:
+
+- insufficient buffer during warm-up
+- silence short-circuiting
+- microphone permission failures
+- microphone interruption
+- ML disabled mode
+- ML inference failure with rule-based fallback
+
+<a id="evaluation-system"></a>
+## 7. Evaluation System
+
+LoLvlance now includes a basic golden-set evaluation and CI gate.
+
+### Golden Dataset
+
+Golden samples live under:
 
 ```text
-[vocal, guitar, bass, drums, keys]
+eval/goldens/
 ```
 
-### Example Raw ONNX Output
+Each sample directory contains:
 
-```json
-{
-  "issue_probs": [[0.5728, 0.3190, 0.4393, 0.5886, 0.4168, 0.5056, 0.4896, 0.3736, 0.6350]],
-  "source_probs": [[0.5122, 0.5328, 0.6024, 0.5892, 0.5437]],
-  "eq_freq": [[0.5346]],
-  "eq_gain_db": [[-0.9317]]
-}
+- one audio file
+- one `metadata.json`
+
+Example metadata fields:
+
+- `file`
+- `expected_source`
+- `expected_issue`
+- `severity`
+
+### Evaluation Script
+
+Main evaluator:
+
+```text
+ml/eval/evaluate.py
 ```
 
-### Important Note About EQ
+It:
 
-`eq_freq` and `eq_gain_db` are part of the exported ONNX contract, but they are **not learned by a dedicated EQ head**.
+- loads golden samples
+- runs model inference
+- computes issue/source precision, recall, and F1
+- prints a confusion summary
+- compares results against a stored baseline
 
-They are currently produced by a deterministic projection layer in `ml/onnx_schema_adapter.py` using:
+### Baseline Tracking
 
-- issue probabilities
-- source probabilities
-- rule-defined issue/source EQ mappings
+Baseline file:
 
-That keeps the browser contract stable while the trainable model remains two-head only.
+```text
+ml/eval/baseline.json
+```
 
-<a id="folder-structure"></a>
-## 5. Folder Structure
+This stores:
 
-### Key Directories
+- previous overall performance
+- per-label F1 values
+- critical labels
+- regression tolerance
 
-- `ml/`
-  Python training, export, preprocessing, evaluation, synthetic data generation, and optional local sidecar services.
-- `src/app/audio/`
-  Browser-side feature extraction, ONNX inference, rule analysis, diagnosis post-processing, source-aware EQ logic, and source tagging.
-- `src/app/hooks/`
-  Runtime orchestration. `useMonitoring.ts` is the main entry point for microphone capture and inference.
-- `public/models/`
-  Browser-served model assets. `public/models/lightweight_audio_model.onnx` is the active browser model.
-- `ml/checkpoints/`
-  Trained artifacts and export outputs. Current contents include `model.pt`, `config.json`, `thresholds.json`, `training_history.json`, and `lightweight_audio_model.onnx`.
-- `ml/artifacts/`
-  Derived manifests and generated datasets. Current synthetic manifest lives at `ml/artifacts/public_dataset_manifest.jsonl`.
+### CI Gate
 
-### Current Artifact Notes
+Workflow:
 
-- `ml/checkpoints/lightweight_audio_model.onnx`
-  Latest exported ONNX artifact from the Python training pipeline.
-- `public/models/lightweight_audio_model.onnx`
-  Browser runtime model currently used by the frontend.
-- `public/models/lightweight_audio_model.onnx.data`
-  Left over from an older external-data export. The current runtime model is the standalone `.onnx` file.
+```text
+.github/workflows/eval.yml
+```
 
-<a id="how-to-run"></a>
-## 6. How to Run
+Current gate:
+
+- runs on pushes and pull requests affecting `ml/**`, `eval/**`, and the workflow itself
+- uses `ml/eval/evaluate.py`
+- enforces `--min-f1 0.65`
+- fails if overall F1 drops below threshold or baseline regressions exceed tolerance
+
+### Important Limitation
+
+The current golden set is still small. It is a useful regression detector, not yet a robust production benchmark.
+
+<a id="test-infrastructure"></a>
+## 8. Test Infrastructure
+
+The repo now has dedicated tests for input integrity and ML export behavior.
+
+### Input Integrity Tests
+
+- `ml/tests/test_waveform_parity.py`
+  Validates waveform-level parity between Python preprocessing and browser-equivalent preprocessing.
+- `ml/tests/test_feature_parity.py`
+  Validates end-to-end model-input feature parity.
+- `ml/tests/test_resampler.py`
+  Validates resampling behavior for common browser capture rates such as `48 kHz` and `44.1 kHz`.
+- `ml/tests/test_manifest_leakage.py`
+  Detects split leakage, duplicate files, track-group overlap, and weak naming collisions.
+
+### Existing ML Pipeline Tests
+
+- `ml/tests/test_export_to_onnx.py`
+- `ml/tests/test_training_pipeline.py`
+- `ml/tests/test_legacy_onnx_adapter.py`
+
+### What These Tests Mean
+
+These tests are meant to catch silent reliability failures:
+
+- preprocessing drift
+- resampling drift
+- export contract breakage
+- dataset split contamination
+
+They should be treated as part of the release criteria for future production models.
+
+<a id="product-positioning"></a>
+## 9. Product Positioning
+
+LoLvlance should currently be described as:
+
+- continuous monitoring
+- live session analysis
+- updated every few seconds
+- assistive guidance for non-expert operators
+
+It should **not** be described as:
+
+- real-time diagnosis
+- instant-response audio intelligence
+- production-grade AI sound engineer
+
+Recommended product interpretation:
+
+> LoLvlance watches the session continuously, updates guidance on a rolling basis, and suggests what to check next.
+
+<a id="development-workflow"></a>
+## 10. Development Workflow
 
 ### Frontend
-
-Prerequisites:
-
-- Node.js 18+ recommended
-- npm
-
-Install and start the app:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the app in the browser:
+Build check:
 
-```text
-http://localhost:3000
+```bash
+npm run build
 ```
 
-Then:
-
-1. Allow microphone access.
-2. Start monitoring in the UI.
-3. Speak, stay silent, or play audio through speakers.
-4. Watch the UI refresh every few seconds with problems, detected sources, and EQ suggestions.
-
-### Useful Browser Console Logs
-
-- `[audio-ml]`
-  Model readiness and parsed ML output.
-- `[audio-ml:raw]`
-  Temporary raw model tensor logging for integration validation.
-- `[audio-rules]`
-  Rule-engine analysis.
-- `[audio-stems]`
-  Local stem-service behavior.
-- `[audio-tags]`
-  Fallback open-source source tagging behavior.
-
-### Optional: Start the Local Stem Service
-
-The app works without the stem service, but source enrichment is better when it is running.
-
-PowerShell example:
-
-```powershell
-python -m venv .venv-ml
-.\.venv-ml\Scripts\python.exe -m pip install --upgrade pip
-.\.venv-ml\Scripts\python.exe -m pip install -r ml\requirements-stem-service.txt
-.\.venv-ml\Scripts\python.exe ml\stem_separation_service.py
-```
-
-### Optional: Run ML Tests
+### Python Environment
 
 PowerShell example:
 
@@ -252,50 +436,117 @@ PowerShell example:
 python -m venv .venv-ml
 .\.venv-ml\Scripts\python.exe -m pip install --upgrade pip
 .\.venv-ml\Scripts\python.exe -m pip install -r ml\requirements-test.txt
+```
+
+### Run Golden Evaluation
+
+```powershell
+.\.venv-ml\Scripts\python.exe ml\eval\evaluate.py `
+  --goldens-dir eval\goldens `
+  --model-path ml\checkpoints\lightweight_audio_model.onnx `
+  --thresholds-path ml\checkpoints\label_thresholds.json `
+  --baseline-path ml\eval\baseline.json `
+  --min-f1 0.65
+```
+
+### Run ML Tests
+
+```powershell
 $env:PYTHONPATH = (Get-Location).Path
 .\.venv-ml\Scripts\python.exe -m unittest discover -s ml/tests -p 'test_*.py' -v
 ```
 
-### Production Build Check
+### Optional Stem Service
 
-```bash
-npm run build
+```powershell
+.\.venv-ml\Scripts\python.exe -m pip install -r ml\requirements-stem-service.txt
+.\.venv-ml\Scripts\python.exe ml\stem_separation_service.py
 ```
 
-<a id="known-limitations"></a>
-## 7. Known Limitations
+### Model Promotion Flow
 
-- The current model is trained on synthetic data only.
-- The current browser UX analyzes a `~3` second window and updates guidance about every `~4` seconds.
-- There is no real-world validation set or benchmark report yet.
-- There is no data collection or feedback pipeline.
-- EQ is deterministic and rule-based, not learned from supervised EQ targets.
-- The trainable model has only two learned heads:
-  - issue head
-  - source head
-- Real-world source predictions are not yet reliable enough for production use.
-- Silence is gated before inference. Very quiet inputs return an empty result instead of full ML output.
-- The optional stem service is a separate dependency. If it is not running, the UI may show a stem-service fallback even when browser ML is healthy.
-- The current product should be positioned as continuous monitoring and live session analysis, not as an instant-response diagnosis tool.
+1. Train or export a checkpoint under `ml/checkpoints/`
+2. Run golden evaluation and relevant tests
+3. Copy the promoted ONNX artifact into `public/models/`
+4. Update `MODEL_VERSION` / runtime config if needed
+5. Verify browser behavior manually before treating the model as user-facing
 
-<a id="next-steps"></a>
-## 8. Next Steps
+<a id="limitations"></a>
+## 11. Limitations
 
-- Train on real public datasets instead of synthetic fallback data.
-- Add a proper data collection and review pipeline.
-- Improve source label quality and coverage.
-- Build a held-out real-world evaluation set and report.
-- Calibrate thresholds on real data instead of synthetic validation only.
-- Keep product copy aligned with the current few-seconds monitoring cadence until a faster runtime exists.
-- Decide whether EQ should remain deterministic or later become a learned head.
-- Remove temporary raw tensor logging once browser integration is fully stabilized.
+### Model Limitations
+
+- the active browser model is `v0.0-pipeline-check`
+- it is synthetic-data-trained and not production-ready
+- source predictions remain especially vulnerable to dataset bias
+- browser runtime still uses a compatibility EQ output contract rather than a full multi-band browser schema
+
+### Data Limitations
+
+- no real production feedback loop exists yet
+- the current golden dataset is too small to act as a complete benchmark
+- synthetic fallback data remains in the repo and can still mislead if treated as a quality signal
+
+### Inference Limitations
+
+- browser inference quality depends on local preprocessing consistency
+- optional source enrichment still depends on separate local services or browser fallbacks
+- there is no server-side inference path yet
+- silence and low-level inputs intentionally short-circuit parts of the pipeline
+
+### Product Limitations
+
+- LoLvlance helps users decide what to try next; it does not guarantee that the diagnosis is correct
+- the current system should not be marketed as a fully trustworthy AI mix assistant
+
+<a id="roadmap"></a>
+## 12. Roadmap
+
+### Immediate
+
+- keep product copy aligned with the actual monitoring behavior
+- maintain model isolation until a real-data checkpoint exists
+- expand the golden dataset beyond the current starter set
+- keep parity and leakage tests green
+
+### Short Term
+
+- train on real-source audio instead of synthetic fallback data
+- promote learned EQ outputs beyond the internal training path
+- expand CI coverage for input integrity and browser-facing regression checks
+- improve threshold calibration on real evaluation audio
+
+### Longer Term
+
+- graduate from `v0.0-pipeline-check` to a true production model
+- decide whether browser-only inference remains sufficient
+- add a server inference path if larger models become necessary
+- add real user feedback and review loops
+
+<a id="handover-notes"></a>
+## 13. Handover Notes
+
+If you are taking over the project, start here:
+
+- `HANDOVER.md` for operational and architectural context
+- `src/app/hooks/useMonitoring.ts` for browser runtime behavior
+- `src/app/config/modelRuntime.ts` for model isolation and version routing
+- `ml/eval/evaluate.py` for regression gating
+- `ml/tests/` for preprocessing and data-integrity checks
+
+The most important thing to preserve is the distinction between:
+
+- **pipeline works**
+- **model is trustworthy**
+
+Right now, the first statement is true. The second is not yet true.
 
 ## Related Docs
 
 - `HANDOVER.md`
-  Developer-oriented system handover and operational guidance.
+  Developer-oriented technical handover and operational guidance.
 - `ML_README.md`
-  ML-specific architecture, training, and evaluation notes.
+  ML-specific notes, model details, and training/export context.
 - `HANDOVER.ko.md`
   Korean developer handover.
 - `ML_README.ko.md`

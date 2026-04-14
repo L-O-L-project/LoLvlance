@@ -2,113 +2,100 @@
 
 This document covers the ML-specific part of LoLvlance:
 
-- model architecture
-- preprocessing
-- training loop
-- synthetic dataset fallback
-- evaluation and export checks
+- current runtime model status
+- model and export architecture
+- degradation-based training path
+- evaluation and CI gating
+- input-integrity test coverage
 
-The main point to keep in mind is that the current system is **ML-integrated and operational**, but the current checkpoint is still **synthetic-data-trained**.
+The most important framing is:
+
+- the **active browser checkpoint** is still `v0.0-pipeline-check`
+- the **Python ML codebase** now supports a more advanced learning-based path
+- the existence of that code does not change the current product honesty requirements
 
 Korean version: `ML_README.ko.md`
 
 ## Quick Links
 
 [![Architecture](https://img.shields.io/badge/Model%20Architecture-2563EB?style=for-the-badge&logo=pytorch&logoColor=white)](#model-architecture)
-[![Training](https://img.shields.io/badge/Training%20Details-7C3AED?style=for-the-badge&logo=python&logoColor=white)](#training-details)
-[![Synthetic Data](https://img.shields.io/badge/Synthetic%20Dataset-DC2626?style=for-the-badge&logo=databricks&logoColor=white)](#synthetic-dataset-explanation)
-[![Evaluation](https://img.shields.io/badge/Evaluation%20Strategy-0891B2?style=for-the-badge&logo=target&logoColor=white)](#evaluation-strategy)
-
-[![Korean ML Docs](https://img.shields.io/badge/Korean-ML%20README-111827?style=for-the-badge&logo=readme&logoColor=white)](ML_README.ko.md)
+[![Training](https://img.shields.io/badge/Training%20Pipeline-7C3AED?style=for-the-badge&logo=python&logoColor=white)](#training-pipeline)
+[![Evaluation](https://img.shields.io/badge/Evaluation%20System-0891B2?style=for-the-badge&logo=target&logoColor=white)](#evaluation-system)
+[![Integrity](https://img.shields.io/badge/Input%20Integrity-DC2626?style=for-the-badge&logo=pytest&logoColor=white)](#input-integrity)
 [![Main README](https://img.shields.io/badge/Main-README-111827?style=for-the-badge&logo=gitbook&logoColor=white)](README.md)
-[![Handover](https://img.shields.io/badge/Developer-Handover-111827?style=for-the-badge&logo=files&logoColor=white)](HANDOVER.md)
+[![Handover](https://img.shields.io/badge/Handover-111827?style=for-the-badge&logo=files&logoColor=white)](HANDOVER.md)
 
 ## Runtime Note
 
-- The current browser product flow analyzes a rolling `~3.0` second window.
-- Monitoring passes are scheduled on a `~4` second cadence in `src/app/hooks/useMonitoring.ts`.
-- In product terms, this should be positioned as continuous monitoring and live session analysis, not as instant-response behavior.
+- The browser runtime analyzes a rolling `3.0` second window.
+- Monitoring passes run on a `1.0` second stride in `src/app/hooks/useMonitoring.ts`.
+- The active runtime model is isolated as `v0.0-pipeline-check`.
+- Product positioning should remain continuous monitoring and live session analysis, not instant-response AI.
 
 <a id="model-architecture"></a>
 ## 1. Model Architecture
 
-### Trainable Network
+### Active Browser Runtime Contract
 
-The trainable model lives in `ml/model.py` as `LightweightAudioAnalysisNet`.
+The browser ONNX contract remains:
 
-It is a lightweight CNN with:
+- `issue_probs`
+- `source_probs`
+- `eq_freq`
+- `eq_gain_db`
 
-- stacked convolutional blocks
-- shared encoder
-- pooled embedding
-- `issue_head`
-- `source_head`
+This is a compatibility contract used by the frontend.
 
-Current configuration defaults:
+### Python Model Code
 
-- mel bins: `64`
-- convolution channels: `(24, 48, 72, 96)`
-- head hidden dim: `96`
-- dropout: `0.15`
+The current Python model implementation lives in `ml/model.py` and supports:
 
-### Architecture Diagram
+- `AudioIntelligenceNet`
+- `ProductionAudioIntelligenceNet`
+- `LightweightAudioAnalysisNet`
 
-```mermaid
-flowchart LR
-    A[Waveform 16 kHz / 3.0 s] --> B[Log-Mel Spectrogram\n~298 x 64]
-    B --> C[CNN Encoder]
-    C --> D[Global Average Pool]
-    C --> E[Global Max Pool]
-    D --> F[Concat Embedding\n192-d]
-    E --> F
-    F --> G[Issue Head\n9 logits]
-    F --> H[Source Head\n5 logits]
-    G --> I[issue_probs]
-    H --> J[source_probs]
-    I --> K[HierarchicalEqProjection]
-    J --> K
-    K --> L[eq_freq]
-    K --> M[eq_gain_db]
+### Encoder Variants
+
+- `student`
+  lightweight CNN encoder intended for browser-oriented deployment
+- `teacher`
+  transformer-style spectrogram encoder intended for stronger offline training and distillation workflows
+
+### Current Learned Heads
+
+The current model code supports:
+
+- source classification head
+- source-conditioned issue classification head
+- learned multi-band EQ head
+
+The learned EQ head predicts:
+
+```text
+eq_params: (batch, N_bands, 2)
 ```
 
-### Tensor Shape Flow
+where each band contains:
 
-| Stage | Shape | Notes |
-| --- | --- | --- |
-| Input waveform | `(48000,)` | 3.0 seconds at 16 kHz |
-| Log-mel spectrogram | `(time_steps, 64)` | Typical `time_steps ~= 298` |
-| Model input | `(batch, time_steps, 64)` | Browser and PyTorch export contract |
-| Encoder output | `(batch, channels, time', mel')` | Internal convolutional representation |
-| Pooled embedding | `(batch, 192)` | Avg pool + max pool concatenation |
-| Issue logits | `(batch, 9)` | Trainable issue head |
-| Source logits | `(batch, 5)` | Trainable source head |
-| Exported EQ tensors | `(batch, 1)` | Deterministic projection, not learned |
+- frequency in Hz
+- gain in dB
 
-### Input Contract
+Default band count in code:
 
-The model expects:
+```text
+N_bands = 5
+```
 
-- dtype: `float32`
-- shape: `(batch, time_steps, 64)`
-- semantic meaning: log-mel spectrogram
+### Important Distinction
 
-The input can also be provided as `(time_steps, 64)` in PyTorch and is expanded to batch form internally.
+The Python training model now supports learned multi-band EQ, but the browser-facing ONNX export currently emits a compatibility summary:
 
-### Output Contract in PyTorch
+- `eq_freq`
+- `eq_gain_db`
 
-The raw PyTorch forward pass returns a dictionary containing:
+That is a runtime contract decision, not a statement that the internal model remains single-band.
 
-- `issue_logits`
-- `issue_probs`
-- `source_logits`
-- `source_probs`
-- `embedding`
-- `problem_logits`
-- `problem_probs`
-
-`problem_logits` and `problem_probs` are legacy aliases of the issue head inside Python only. They are not used by the frontend inference path anymore.
-
-### Trainable Labels
+### Label Schema
 
 Issue labels:
 
@@ -122,360 +109,185 @@ Source labels:
 [vocal, guitar, bass, drums, keys]
 ```
 
-Derived diagnosis labels used by post-processing:
-
-```text
-[vocal_buried, guitar_harsh, bass_muddy, drums_overpower, keys_masking]
-```
-
 Schema source-of-truth:
 
 - Python: `ml/label_schema.py`
 - Frontend mirror: `src/app/audio/mlSchema.ts`
 
-### ONNX Export Wrapper
+<a id="training-pipeline"></a>
+## 2. Training Pipeline
 
-The browser-facing ONNX contract is defined by `ml/export_to_onnx.py`, not by the raw PyTorch forward dictionary.
+### Current Training Direction
 
-`OnnxExportWrapper` returns:
+The ML stack is now structured around a real-audio-plus-degradation path rather than a pure rule-projection path.
 
-```text
-(issue_probs, source_probs, eq_freq, eq_gain_db)
-```
+Key files:
 
-The extra EQ outputs come from `HierarchicalEqProjection` in `ml/onnx_schema_adapter.py`.
+- `ml/train.py`
+- `ml/degradation.py`
+- `ml/losses.py`
+- `ml/model.py`
 
-Important:
+### Data Strategy in Code
 
-- there is no learned EQ head
-- `eq_freq` and `eq_gain_db` are deterministic projections
+The repo now supports a degradation-based dataset path:
 
-<a id="training-details"></a>
-## 2. Training Details
+- start from real source audio manifests
+- apply controlled degradations
+- train issue/source heads on degraded audio
+- train the EQ head against inverse EQ targets
 
-### Preprocessing
+### Implemented Degradation Types
 
-Training preprocessing is defined in `ml/preprocessing.py`.
+The current degradation pipeline includes:
 
-Current configuration:
+- EQ distortion
+- compression
+- synthetic reverb
+- low-pass / high-pass filter errors
 
-- sample rate: `16_000`
-- clip length: `3.0` seconds
-- STFT window: `25 ms`
-- STFT hop: `10 ms`
-- FFT size: `512`
-- mel bins: `64`
+The generated recipe stores:
 
-Feature extraction includes:
-
-- log-mel spectrogram
-- RMS
-- spectral centroid
-- spectral rolloff
-- several band-energy ratios used for weak label inference
-
-### Data Pipeline
-
-`ml/dataset.py` supports manifest generation from public-style dataset roots:
-
-- OpenMIC
-- Slakh
-- MUSAN
-- FSD50K
-
-The pipeline does two different jobs:
-
-1. Build a manifest with weak issue/source targets and metadata.
-2. Load clips dynamically and extract features on demand during training.
-
-The manifest stores:
-
-- `audio_path`
-- `start_seconds`
-- `duration_seconds`
-- `split`
-- `issue_targets`
-- `source_targets`
-- masks for both heads
-- label-quality metadata
-- `track_group_id`
-- feature-derived metadata for debugging and analysis
-
-### Weak Labels
-
-Issue labels are inferred from:
-
-- spectral heuristics
-- dataset context
-- filename hints
-- stem overlap cues for Slakh-like layouts
-
-Source labels are inferred from:
-
-- structured CSV annotations when available
-- generic tag CSV fields
-- filename terms
-- stem filenames
-
-If a source label is unavailable, the corresponding mask is `0`, which prevents that label from contributing to the loss.
-
-### Losses
-
-The current training objective is two-head only:
-
-- masked `BCEWithLogitsLoss` for issue head
-- masked `BCEWithLogitsLoss` for source head
-
-Implementation details:
-
-- per-label positive weights are computed from the training split
-- unavailable source supervision is ignored via masks
-- total loss is a weighted sum of issue and source losses
-
-### Optimizer and Defaults
-
-Current code defaults in `ml/train.py`:
-
-- optimizer: `AdamW`
-- learning rate: `1e-3`
-- weight decay: `1e-4`
-- batch size: `16`
-- default epochs: `6`
-
-The current synthetic checkpoint was trained with:
-
-- epochs: `10`
-- batch size: `16`
-- learning rate: `1e-3`
-- device: `cpu`
-
-### Training Outputs
-
-`ml/train.py` writes:
-
-- `ml/checkpoints/model.pt`
-- `ml/checkpoints/best_sound_issue_model.pt`
-- `ml/checkpoints/last_sound_issue_model.pt`
-- `ml/checkpoints/config.json`
-- `ml/checkpoints/thresholds.json`
-- `ml/checkpoints/label_thresholds.json`
-- `ml/checkpoints/training_history.json`
-
-If `--export-onnx` is used, it also writes:
-
-- `ml/checkpoints/lightweight_audio_model.onnx`
-- `ml/checkpoints/lightweight_audio_model.metadata.json`
-
-The metadata JSON contains:
-
-- schema version
+- inverse EQ bands
 - issue labels
-- primary issue labels
-- source labels
-- derived diagnosis labels
-- thresholds
-- issue-to-cause mappings
-- issue-to-source-affinity mappings
-- fallback EQ mappings
+- optional compression metadata
+- optional reverb metadata
+- optional filter-error metadata
 
-### Training / Export Flow
+### Training Losses
 
-```mermaid
-flowchart TD
-    A[Dataset Roots or Synthetic Generator] --> B[public_dataset_manifest.jsonl]
-    B --> C[LoLvlanceAudioDataset]
-    C --> D[Dynamic Feature Extraction]
-    D --> E[LightweightAudioAnalysisNet]
-    E --> F[Masked BCE Training]
-    F --> G[Threshold Tuning]
-    G --> H[Checkpoint Artifacts]
-    H --> I[OnnxExportWrapper]
-    I --> J[lightweight_audio_model.onnx]
-    J --> K[Browser Runtime]
-```
+Current loss modules in `ml/losses.py`:
 
-### Current Synthetic Run Summary
+- focal loss for issue prediction
+- BCE or softmax source loss depending on head mode
+- Smooth L1 loss for EQ regression
+- KL-based distillation loss for student training
 
-The current validated run produced:
+### Distillation Path
 
-- manifest size: `44` clips
-- train split: `22`
-- val split: `22`
-- best epoch: `10`
-- train loss: `1.4123 -> 0.5785`
-- val loss: `1.3208 -> 1.1534`
-- selection score: `0.7264`
+The current code supports teacher-student training:
 
-These numbers only show that the pipeline is learning something on the synthetic task. They do not imply production accuracy.
+- teacher checkpoint can be provided to `ml/train.py`
+- student can distill issue logits
+- student can distill source logits
+- student can distill normalized EQ outputs
 
-<a id="synthetic-dataset-explanation"></a>
-## 3. Synthetic Dataset Explanation
+### Current Reality Check
 
-### Why It Exists
+The training code is ahead of the active model artifact.
 
-No real public dataset roots were available in this workspace at training time.
+The repo supports a more advanced ML path, but the checked-in browser model is still the isolated experimental checkpoint.
 
-To unblock:
+<a id="evaluation-system"></a>
+## 3. Evaluation System
 
-- manifest generation
-- dataloader validation
-- training loop execution
-- checkpoint writing
-- ONNX export
-- browser inference integration
+### Golden Evaluation
 
-the fallback generator `ml/generate_synthetic_public_datasets.py` was added.
-
-### What It Generates
-
-The generator creates a public-dataset-like directory tree under:
+Golden samples live under:
 
 ```text
-ml/artifacts/synthetic_public_datasets/
+eval/goldens/
 ```
 
-It produces simple audio clips built from:
+Evaluator:
 
-- sine waves
-- band-limited harmonic patterns
-- noise
-- tremolo
+```text
+ml/eval/evaluate.py
+```
 
-and lays them out to resemble:
+The evaluator:
 
-- OpenMIC
-- Slakh
-- MUSAN
-- FSD50K
+- loads golden sample metadata
+- runs model inference
+- computes precision, recall, and F1 for issue and source labels
+- prints a confusion summary
+- compares results against a stored baseline
 
-This lets the existing dataset scanner and weak-label logic run without special-casing the training code.
+### Baseline Tracking
 
-### Why It Is Not Production Data
+Baseline file:
 
-The synthetic set is heavily biased and structurally simple.
+```text
+ml/eval/baseline.json
+```
 
-Examples:
+Used for:
 
-- source distributions are unrealistic
-- timbral variation is limited
-- instrument interactions are simplistic
-- label balance is artificial
-- current manifest gives `keys` support on every sample
+- previous checkpoint comparison
+- per-label regression detection
+- CI gating
 
-That last point matters. It explains why the browser model currently tends to over-predict `keys` in real usage.
+### CI Gate
 
-### Proper Interpretation
+Workflow:
 
-The synthetic checkpoint should be treated as:
+```text
+.github/workflows/eval.yml
+```
 
-- a pipeline verification artifact
-- a schema validation artifact
-- a browser integration artifact
+Current threshold:
 
-It should not be treated as:
+- `min_f1 = 0.65`
 
-- a benchmark model
-- a production-quality classifier
-- a trustworthy real-world diagnosis model
+### Important Limitation
 
-<a id="evaluation-strategy"></a>
-## 4. Evaluation Strategy
+The current golden set is still small. It is useful for regression detection, but it is not yet enough to justify strong model-quality claims.
 
-### Minimum Checks Before Accepting a New Checkpoint
+<a id="input-integrity"></a>
+## 4. Input Integrity
 
-1. Training completes without runtime errors.
-2. Loss decreases over training.
-3. `model.forward()` works on dummy input.
-4. ONNX export passes `onnxruntime` verification.
-5. Browser inference loads the model and returns finite outputs.
-6. Raw probabilities change across different audio scenarios.
+The repo now includes explicit tests for preprocessing consistency and dataset hygiene.
 
-### Shape and Schema Checks
+### Tests
 
-The required ONNX outputs are:
+- `ml/tests/test_waveform_parity.py`
+- `ml/tests/test_feature_parity.py`
+- `ml/tests/test_resampler.py`
+- `ml/tests/test_manifest_leakage.py`
 
-- `issue_probs`: `(batch, 9)`
-- `source_probs`: `(batch, 5)`
-- `eq_freq`: `(batch, 1)`
-- `eq_gain_db`: `(batch, 1)`
+### Coverage
 
-The frontend depends on those names exactly.
+These tests check:
 
-### Threshold and Metric Checks
+- waveform parity between Python and browser-equivalent preprocessing
+- feature parity for final model inputs
+- resampler behavior across common browser capture rates
+- train/validation leakage in the manifest
 
-`ml/metrics.py` currently provides:
+### Why This Exists
 
-- per-label precision
-- per-label recall
-- per-label F1
-- per-label AUROC when possible
-- micro metrics
-- macro F1
-- threshold tuning over a candidate threshold grid
+Model quality can degrade because of input inconsistency even when the architecture is unchanged.
 
-For real training, the key checks should be:
+These tests are meant to make that failure mode visible.
 
-- per-label support
-- source-head coverage
-- threshold stability
-- whether performance is real across all labels instead of concentrated in one overrepresented source
+<a id="current-status"></a>
+## 5. Current Status
 
-### Output Behavior Checks
+### What Is Production-Like
 
-Before shipping a checkpoint, inspect:
+- browser ML loading path works
+- ONNX export path works
+- model isolation exists
+- monitoring pipeline uses a rolling window with no intentional blind gap
+- golden evaluation and integrity tests exist
 
-- are `issue_probs` non-constant?
-- are `source_probs` non-collapsed?
-- are `eq_freq` and `eq_gain_db` finite?
-- do outputs change meaningfully between silence, voice, music, and harsh inputs?
+### What Is Not Production-Ready
 
-### Browser Checks
+- the active browser checkpoint
+- synthetic-data bias in the current runtime artifact
+- source reliability on real audio
+- real-world benchmark coverage
 
-Recommended browser sanity scenarios:
+### Correct Interpretation
 
-1. Silence
-   Expect no issue activations or a short-circuited empty result.
-2. Voice only
-   Expect stronger vocal-related source activation.
-3. Music playback
-   Expect multiple sources to activate when appropriate.
-4. Distorted or harsh audio
-   Expect some movement in harsh-related issue dimensions.
+Today the repo proves:
 
-Also remember that the browser only refreshes results every few seconds in the current runtime. In demos, wait at least one monitoring pass before judging whether a scenario produced the expected change.
+- the pipeline can run
+- the system can be evaluated
+- regressions can be caught
 
-### Current Known Evaluation Outcome
+It does **not** prove:
 
-The current synthetic checkpoint passes infrastructure checks:
-
-- loadable in PyTorch
-- exportable to ONNX
-- verified by `onnxruntime`
-- loadable in browser
-- produces finite outputs
-- produces dynamic outputs across scenarios
-
-But it does not yet pass semantic-quality expectations on real audio:
-
-- voice is not reliably vocal-dominant
-- music sources are not cleanly separated
-- issue movement is present but not yet trustworthy
-
-### Existing Automated Checks
-
-The repo already includes ML-side automated checks for:
-
-- ONNX export and runtime verification in `ml/tests/test_export_to_onnx.py`
-- training-pipeline validation in `ml/tests/test_training_pipeline.py`
-- legacy-ONNX adaptation validation in `ml/tests/test_legacy_onnx_adapter.py`
-
-### Practical Recommendation
-
-Until real-data training exists, evaluate new checkpoints primarily for:
-
-- pipeline correctness
-- schema correctness
-- output variability
-- numerical stability
-
-Do not interpret the current synthetic checkpoint as evidence that the underlying product problem is solved.
+- production accuracy
+- production trustworthiness
+- production-ready EQ intelligence
