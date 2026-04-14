@@ -3,16 +3,22 @@ import type {
   AnalysisResult,
   AnalysisEngine,
   BufferedAudioSnapshot,
+  DetectedAudioSource,
+  DiagnosticProblem,
   ExtractedAudioFeatures,
   MicrophoneErrorCode,
-  MicrophonePermissionState
+  MicrophonePermissionState,
+  MlInferenceOutput,
+  RuleBasedIssue,
+  SourceEqRecommendation
 } from '../types';
 import {
   appendToCircularBuffer,
   createBufferedAudioSnapshot,
-  readCircularBuffer,
-  ROLLING_BUFFER_SIZE,
+  getWindowSampleCount,
+  readLatestWindowFromCircularBuffer,
   ROLLING_BUFFER_SECONDS,
+  ROLLING_BUFFER_SIZE,
   TARGET_SAMPLE_RATE,
   resampleMonoBuffer
 } from '../audio/audioUtils';
@@ -42,8 +48,11 @@ import {
   ruleAnalysisToDiagnosticProblems
 } from '../audio/ruleBasedAnalysis';
 
-const MONITORING_INTERVAL_MS = 4000;
-// -38 dBFS ≈ 0.012 linear — expressed in dBFS for clarity
+const MONITORING_WINDOW_SECONDS = 3;
+const MONITORING_STRIDE_MS = 1000;
+const MONITORING_EMA_ALPHA = 0.3;
+const MONITORING_MIN_BUFFER_MS = 750;
+const CONFIDENCE_DECAY_FLOOR = 0.08;
 const SILENCE_THRESHOLD_DBFS = -38;
 const CAPTURE_WORKLET_NAME = 'soundfix-microphone-capture';
 const CAPTURE_WORKLET_SOURCE = `
@@ -54,55 +63,37 @@ class SoundFixMicrophoneCaptureProcessor extends AudioWorkletProcessor {
     this.buffer = new Float32Array(this.chunkSize);
     this.offset = 0;
   }
-
   process(inputs, outputs) {
     const input = inputs[0];
     const channel = input && input[0];
     const output = outputs[0];
-
-    if (output && output[0]) {
-      output[0].fill(0);
-    }
-
+    if (output && output[0]) output[0].fill(0);
     if (channel && channel.length) {
       let cursor = 0;
-
       while (cursor < channel.length) {
         const remaining = this.chunkSize - this.offset;
         const copyCount = Math.min(remaining, channel.length - cursor);
-
         this.buffer.set(channel.subarray(cursor, cursor + copyCount), this.offset);
         this.offset += copyCount;
         cursor += copyCount;
-
         if (this.offset === this.chunkSize) {
-          this.port.postMessage(
-            { type: 'samples', samples: this.buffer.buffer },
-            [this.buffer.buffer]
-          );
+          this.port.postMessage({ type: 'samples', samples: this.buffer.buffer }, [this.buffer.buffer]);
           this.buffer = new Float32Array(this.chunkSize);
           this.offset = 0;
         }
       }
     }
-
     return true;
   }
 }
-
 registerProcessor('${CAPTURE_WORKLET_NAME}', SoundFixMicrophoneCaptureProcessor);
 `;
 
 type CaptureNode = AudioWorkletNode | ScriptProcessorNode;
-
 type AudioContextConstructor = typeof AudioContext;
 
 function normalizePermissionState(state: PermissionState['state']): MicrophonePermissionState {
-  if (state === 'granted' || state === 'denied') {
-    return state;
-  }
-
-  return 'prompt';
+  return state === 'granted' || state === 'denied' ? state : 'prompt';
 }
 
 function getAudioContextConstructor(): AudioContextConstructor | null {
@@ -111,37 +102,30 @@ function getAudioContextConstructor(): AudioContextConstructor | null {
     ?? null;
 }
 
+function buildEmptyAnalysisResult(engine: AnalysisEngine = 'rule-based-fallback'): AnalysisResult {
+  return {
+    problems: [],
+    issues: [],
+    eq_recommendations: [],
+    engine,
+    timestamp: Date.now()
+  };
+}
+
 function buildAnalysisResult(
   snapshot: BufferedAudioSnapshot,
   features: ExtractedAudioFeatures,
   engine: AnalysisEngine = 'rule-based'
 ): AnalysisResult {
-  if (
-    snapshot.samples.length < TARGET_SAMPLE_RATE / 2 ||
-    snapshot.dbRms < SILENCE_THRESHOLD_DBFS
-  ) {
-    logRuleBasedAnalysis({
-      issues: [],
-      eq_recommendations: [],
-      detections: []
-    });
-
-    return {
-      problems: [],
-      issues: [],
-      eq_recommendations: [],
-      engine,
-      timestamp: Date.now()
-    };
+  if (snapshot.samples.length < TARGET_SAMPLE_RATE / 2 || snapshot.dbRms < SILENCE_THRESHOLD_DBFS) {
+    logRuleBasedAnalysis({ issues: [], eq_recommendations: [], detections: [] });
+    return buildEmptyAnalysisResult(engine);
   }
 
   const ruleBasedAnalysis = analyzeRuleBasedAudioIssues(features);
   logRuleBasedAnalysis(ruleBasedAnalysis);
-
   const problems = ruleAnalysisToDiagnosticProblems(ruleBasedAnalysis);
 
-  // Crest factor below ~3 (≈9.5 dB) indicates heavy limiting/compression.
-  // Flag it as an imbalance problem so the user knows the signal is over-compressed.
   if (snapshot.crestFactor < 3) {
     problems.push({
       type: 'imbalance',
@@ -149,7 +133,7 @@ function buildAnalysisResult(
       sources: ['overall'],
       details: ['transient_overload'],
       actions: [
-        `Signal is heavily compressed (crest factor ${snapshot.crestFactor.toFixed(1)}×). Consider reducing limiting or gain staging.`
+        `Signal is heavily compressed (crest factor ${snapshot.crestFactor.toFixed(1)}횞). Consider reducing limiting or gain staging.`
       ]
     });
   }
@@ -199,21 +183,11 @@ function mergeInstrumentDetections(
     NonNullable<AnalysisResult['detectedSources']>[number]['source'],
     NonNullable<AnalysisResult['detectedSources']>[number]
   >();
-
-  const stemMetricBySource = new Map(
-    stemMetrics
-      .filter((stem) => stem.source)
-      .map((stem) => [stem.source!, stem])
-  );
+  const stemMetricBySource = new Map(stemMetrics.filter((stem) => stem.source).map((stem) => [stem.source!, stem]));
 
   stemDetectedSources.forEach((entry) => {
     const stemMetric = stemMetricBySource.get(entry.source);
-    const weightedConfidence = clamp(
-      entry.confidence * 0.72 + (stemMetric?.energyRatio ?? 0) * 0.28,
-      0,
-      1
-    );
-
+    const weightedConfidence = clamp(entry.confidence * 0.72 + (stemMetric?.energyRatio ?? 0) * 0.28, 0, 1);
     merged.set(entry.source, {
       source: entry.source,
       confidence: Number(weightedConfidence.toFixed(2)),
@@ -223,10 +197,8 @@ function mergeInstrumentDetections(
 
   fallbackDetectedSources.forEach((entry) => {
     const existing = merged.get(entry.source);
-
     if (!existing) {
       const boostThreshold = stemDetectedSources.length > 0 ? 0.14 : 0.08;
-
       if (entry.confidence >= boostThreshold) {
         merged.set(entry.source, {
           ...entry,
@@ -234,16 +206,10 @@ function mergeInstrumentDetections(
           labels: uniqueInOrder(entry.labels)
         });
       }
-
       return;
     }
 
-    const blendedConfidence = clamp(
-      existing.confidence * 0.78 + entry.confidence * 0.32,
-      0,
-      1
-    );
-
+    const blendedConfidence = clamp(existing.confidence * 0.78 + entry.confidence * 0.32, 0, 1);
     merged.set(entry.source, {
       source: entry.source,
       confidence: Number(Math.max(existing.confidence, blendedConfidence).toFixed(2)),
@@ -252,60 +218,47 @@ function mergeInstrumentDetections(
   });
 
   stemMetrics.forEach((stem) => {
-    if (!stem.source || merged.has(stem.source)) {
-      return;
-    }
-
-    if (stem.energyRatio < 0.035 && stem.rms < 0.0035) {
+    if (!stem.source || merged.has(stem.source) || (stem.energyRatio < 0.035 && stem.rms < 0.0035)) {
       return;
     }
 
     merged.set(stem.source, {
       source: stem.source,
-      confidence: Number(
-        clamp(stem.energyRatio * 0.8 + stem.rms * 3.5, 0.1, 0.72).toFixed(2)
-      ),
+      confidence: Number(clamp(stem.energyRatio * 0.8 + stem.rms * 3.5, 0.1, 0.72).toFixed(2)),
       labels: [stem.stem]
     });
   });
 
-  return [...merged.values()]
-    .sort((left, right) => right.confidence - left.confidence)
-    .slice(0, 5);
+  return [...merged.values()].sort((left, right) => right.confidence - left.confidence).slice(0, 5);
 }
 
 function enrichAnalysisResult(
   result: AnalysisResult,
-  {
-    detectedSources,
-    stemConnected,
-    stemModel,
-    stemMetrics
-  }: {
+  params: {
     detectedSources: NonNullable<AnalysisResult['detectedSources']>;
     stemConnected: boolean;
     stemModel?: string;
     stemMetrics: NonNullable<AnalysisResult['stemMetrics']>;
   }
 ): AnalysisResult {
-  const mergedResult = mergeDetectedSources(result, detectedSources);
-  const effectiveDetectedSources = detectedSources.length > 0
-    ? detectedSources
+  const mergedResult = mergeDetectedSources(result, params.detectedSources);
+  const effectiveDetectedSources = params.detectedSources.length > 0
+    ? params.detectedSources
     : (mergedResult.detectedSources ?? []);
 
   return {
     ...mergedResult,
     detectedSources: effectiveDetectedSources,
-    stemMetrics,
+    stemMetrics: params.stemMetrics,
     stemService: {
-      connected: stemConnected,
-      provider: stemConnected ? 'stem-service' : 'browser-fallback',
-      model: stemModel
+      connected: params.stemConnected,
+      provider: params.stemConnected ? 'stem-service' : 'browser-fallback',
+      model: params.stemModel
     },
     sourceEqRecommendations: buildSourceAwareEqRecommendations({
       detectedSources: effectiveDetectedSources,
       issues: mergedResult.issues ?? [],
-      stemMetrics
+      stemMetrics: params.stemMetrics
     })
   };
 }
@@ -323,7 +276,10 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   const permissionStatusRef = useRef<PermissionStatus | null>(null);
   const workletModuleUrlRef = useRef<string | null>(null);
   const analysisInFlightRef = useRef(false);
+  const pendingMonitoringPassRef = useRef(false);
   const captureSessionIdRef = useRef(0);
+  const isMonitoringRef = useRef(false);
+  const smoothedResultRef = useRef<AnalysisResult | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -347,13 +303,17 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     }
   }, []);
 
+  const resetMonitoringState = useCallback(() => {
+    isMonitoringRef.current = false;
+    pendingMonitoringPassRef.current = false;
+    analysisInFlightRef.current = false;
+    smoothedResultRef.current = null;
+  }, []);
+
   const handleIncomingSamples = useCallback((samples: Float32Array, sourceSampleRate: number) => {
     const nativeTargetLength = Math.max(1, Math.round(sourceSampleRate * ROLLING_BUFFER_SECONDS));
 
-    if (
-      nativeRollingBufferRef.current.length !== nativeTargetLength
-      || nativeSampleRateRef.current !== sourceSampleRate
-    ) {
+    if (nativeRollingBufferRef.current.length !== nativeTargetLength || nativeSampleRateRef.current !== sourceSampleRate) {
       nativeRollingBufferRef.current = new Float32Array(nativeTargetLength);
       nativeRollingBufferWriteIndexRef.current = 0;
       nativeRollingBufferLengthRef.current = 0;
@@ -366,7 +326,6 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       nativeRollingBufferWriteIndexRef.current,
       nativeRollingBufferLengthRef.current
     );
-
     nativeRollingBufferWriteIndexRef.current = nativeState.writeIndex;
     nativeRollingBufferLengthRef.current = nativeState.filledLength;
 
@@ -377,46 +336,47 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       rollingBufferWriteIndexRef.current,
       rollingBufferLengthRef.current
     );
-
     rollingBufferWriteIndexRef.current = nextState.writeIndex;
     rollingBufferLengthRef.current = nextState.filledLength;
   }, []);
 
-  const getBufferedAudio = useCallback((): BufferedAudioSnapshot => {
-    const samples = readCircularBuffer(
+  const getBufferedAudio = useCallback((windowSeconds = MONITORING_WINDOW_SECONDS): BufferedAudioSnapshot => {
+    const samples = readLatestWindowFromCircularBuffer(
       rollingBufferRef.current,
       rollingBufferWriteIndexRef.current,
-      rollingBufferLengthRef.current
+      rollingBufferLengthRef.current,
+      getWindowSampleCount(windowSeconds, TARGET_SAMPLE_RATE)
     );
-
     return createBufferedAudioSnapshot(samples);
   }, []);
 
-  const getNativeBufferedAudio = useCallback((): BufferedAudioSnapshot => {
-    const samples = readCircularBuffer(
+  const getNativeBufferedAudio = useCallback((windowSeconds = MONITORING_WINDOW_SECONDS): BufferedAudioSnapshot => {
+    const sampleRate = nativeSampleRateRef.current;
+    const samples = readLatestWindowFromCircularBuffer(
       nativeRollingBufferRef.current,
       nativeRollingBufferWriteIndexRef.current,
-      nativeRollingBufferLengthRef.current
+      nativeRollingBufferLengthRef.current,
+      getWindowSampleCount(windowSeconds, sampleRate)
     );
-
-    return createBufferedAudioSnapshot(samples, nativeSampleRateRef.current);
+    return createBufferedAudioSnapshot(samples, sampleRate);
   }, []);
 
   const extractCurrentFeatures = useCallback((snapshot?: BufferedAudioSnapshot) => {
     const bufferedSnapshot = snapshot ?? getBufferedAudio();
-    const extractedFeatures = extractAudioFeatures(bufferedSnapshot, {
-      melBinCount: MODEL_MEL_BIN_COUNT
-    });
-
+    const extractedFeatures = extractAudioFeatures(bufferedSnapshot, { melBinCount: MODEL_MEL_BIN_COUNT });
     setLatestFeatures(extractedFeatures);
     logExtractedAudioFeatures(extractedFeatures);
-
     return extractedFeatures;
   }, [getBufferedAudio]);
 
   const analyseCurrentBuffer = useCallback(async (): Promise<AnalysisResult> => {
-    const snapshot = getBufferedAudio();
-    const nativeSnapshot = getNativeBufferedAudio();
+    const snapshot = getBufferedAudio(MONITORING_WINDOW_SECONDS);
+    const nativeSnapshot = getNativeBufferedAudio(MONITORING_WINDOW_SECONDS);
+
+    if (snapshot.durationMs < MONITORING_MIN_BUFFER_MS || snapshot.dbRms < SILENCE_THRESHOLD_DBFS) {
+      return buildEmptyAnalysisResult('rule-based-fallback');
+    }
+
     const extractedFeatures = extractCurrentFeatures(snapshot);
     const mlInferencePromise = ENABLE_MODEL
       ? analyzeWithMlInference(extractedFeatures)
@@ -457,6 +417,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
   const runMonitoringPass = useCallback(async () => {
     if (analysisInFlightRef.current) {
+      pendingMonitoringPassRef.current = true;
       return false;
     }
 
@@ -466,19 +427,40 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     try {
       const nextResult = await analyseCurrentBuffer();
 
-      if (activeSessionId !== captureSessionIdRef.current) {
+      if (activeSessionId !== captureSessionIdRef.current || !isMonitoringRef.current) {
         return false;
       }
 
-      onUpdate(nextResult);
+      const smoothedResult = smoothAnalysisResult(
+        smoothedResultRef.current,
+        nextResult,
+        MONITORING_EMA_ALPHA
+      );
+
+      smoothedResultRef.current = smoothedResult;
+      onUpdate(smoothedResult);
       return true;
     } finally {
       analysisInFlightRef.current = false;
+
+      if (
+        pendingMonitoringPassRef.current
+        && activeSessionId === captureSessionIdRef.current
+        && isMonitoringRef.current
+      ) {
+        pendingMonitoringPassRef.current = false;
+        window.setTimeout(() => {
+          void runMonitoringPass();
+        }, 0);
+      }
     }
   }, [analyseCurrentBuffer, onUpdate]);
 
   const stopCapture = useCallback(() => {
     captureSessionIdRef.current += 1;
+    clearMonitoringInterval();
+    resetMonitoringState();
+    setIsMonitoring(false);
     setIsCapturing(false);
     setAnalyserNode(null);
 
@@ -495,14 +477,15 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
     analyserRef.current?.disconnect();
     analyserRef.current = null;
-
     mediaSourceRef.current?.disconnect();
     mediaSourceRef.current = null;
-
     outputGainRef.current?.disconnect();
     outputGainRef.current = null;
 
-    mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+    mediaStreamRef.current?.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
     mediaStreamRef.current = null;
 
     const audioContext = audioContextRef.current;
@@ -511,7 +494,19 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     if (audioContext && audioContext.state !== 'closed') {
       void audioContext.close().catch(() => undefined);
     }
-  }, []);
+  }, [clearMonitoringInterval, resetMonitoringState]);
+
+  const handleMicrophoneStreamEnded = useCallback((stream: MediaStream) => {
+    if (mediaStreamRef.current !== stream) {
+      return;
+    }
+
+    clearMonitoringInterval();
+    resetMonitoringState();
+    setPermissionState('prompt');
+    setPermissionError('unknown');
+    stopCapture();
+  }, [clearMonitoringInterval, resetMonitoringState, stopCapture]);
 
   const createScriptProcessorCaptureNode = useCallback((context: AudioContext) => {
     const scriptProcessor = context.createScriptProcessor(2048, 1, 1);
@@ -582,8 +577,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     const setupPromise = (async () => {
       stopCapture();
 
-      const clearedBuffer = rollingBufferRef.current;
-      clearedBuffer.fill(0);
+      rollingBufferRef.current.fill(0);
       rollingBufferWriteIndexRef.current = 0;
       rollingBufferLengthRef.current = 0;
       nativeRollingBufferRef.current.fill(0);
@@ -594,10 +588,6 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         const mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             channelCount: { ideal: 1 },
-            // Do NOT constrain sampleRate here — let the browser capture at its
-            // native rate (44.1 / 48 kHz) so the AnalyserNode has full frequency
-            // coverage up to 20 kHz.  Resampling to TARGET_SAMPLE_RATE happens
-            // later in handleIncomingSamples before ML feature extraction.
             echoCancellation: false,
             noiseSuppression: false,
             autoGainControl: false
@@ -608,9 +598,6 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         let audioContext: AudioContext;
 
         try {
-          // 'balanced' is better than 'interactive' for analysis: we don't need
-          // the lowest possible latency, so the browser can use larger buffers
-          // which reduces CPU overhead and jitter.
           audioContext = new AudioContextClass({ latencyHint: 'balanced' });
         } catch {
           audioContext = new AudioContextClass();
@@ -620,14 +607,9 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
         const mediaSource = audioContext.createMediaStreamSource(mediaStream);
         const analyser = audioContext.createAnalyser();
-        // 4096 bins → ~11 Hz/bin at 48 kHz; much better low-freq resolution.
         analyser.fftSize = 4096;
-        // Disable built-in smoothing entirely — EQVisualization applies its own
-        // asymmetric attack/release ballistics which is more accurate.
         analyser.smoothingTimeConstant = 0.0;
         analyser.minDecibels = -90;
-        // -3 dBFS headroom: was -12, which clipped any signal above -12 dBFS
-        // and made loud mixes look artificially flat at the top of the spectrum.
         analyser.maxDecibels = -3;
 
         const outputGain = audioContext.createGain();
@@ -638,7 +620,6 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         analyser.connect(outputGain);
 
         let captureNode: CaptureNode;
-
         if (audioContext.audioWorklet) {
           try {
             captureNode = await createAudioWorkletCaptureNode(audioContext);
@@ -651,6 +632,11 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
         mediaSource.connect(captureNode);
         captureNode.connect(outputGain);
+        mediaStream.getTracks().forEach((track) => {
+          track.onended = () => {
+            handleMicrophoneStreamEnded(mediaStream);
+          };
+        });
 
         audioContextRef.current = audioContext;
         mediaStreamRef.current = mediaStream;
@@ -663,11 +649,9 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         setPermissionError(null);
         setIsCapturing(true);
         setAnalyserNode(analyser);
-
         return true;
       } catch (error) {
         stopCapture();
-
         const browserError = error as DOMException;
 
         if (browserError.name === 'NotAllowedError' || browserError.name === 'SecurityError') {
@@ -692,7 +676,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
 
     setupPromiseRef.current = setupPromise;
     return setupPromise;
-  }, [createAudioWorkletCaptureNode, createScriptProcessorCaptureNode, stopCapture]);
+  }, [createAudioWorkletCaptureNode, createScriptProcessorCaptureNode, handleMicrophoneStreamEnded, stopCapture]);
 
   const startMonitoring = useCallback(async () => {
     const isReady = await ensureMicrophoneReady();
@@ -702,26 +686,37 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     }
 
     clearMonitoringInterval();
+    isMonitoringRef.current = true;
+    pendingMonitoringPassRef.current = false;
+    smoothedResultRef.current = null;
     setIsMonitoring(true);
     await runMonitoringPass();
 
     intervalRef.current = window.setInterval(() => {
+      if (!isMonitoringRef.current) {
+        return;
+      }
+
       void runMonitoringPass();
-    }, MONITORING_INTERVAL_MS);
+    }, MONITORING_STRIDE_MS);
 
     return true;
   }, [clearMonitoringInterval, ensureMicrophoneReady, runMonitoringPass]);
 
   const stopMonitoring = useCallback(() => {
     clearMonitoringInterval();
+    resetMonitoringState();
     setIsMonitoring(false);
     stopCapture();
-  }, [clearMonitoringInterval, stopCapture]);
+  }, [clearMonitoringInterval, resetMonitoringState, stopCapture]);
 
   useEffect(() => {
     console.info('[audio-monitoring]', {
       ...getModelRuntimeSnapshot(MODEL_VERSION),
-      inferenceTimestamp: new Date().toISOString()
+      inferenceTimestamp: new Date().toISOString(),
+      monitoringWindowSeconds: MONITORING_WINDOW_SECONDS,
+      monitoringStrideMs: MONITORING_STRIDE_MS,
+      emaAlpha: MONITORING_EMA_ALPHA
     });
 
     if (ENABLE_MODEL) {
@@ -808,6 +803,181 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   };
 }
 
+function smoothAnalysisResult(
+  previous: AnalysisResult | null,
+  next: AnalysisResult,
+  alpha: number
+): AnalysisResult {
+  if (!previous) {
+    return {
+      ...next,
+      timestamp: Date.now()
+    };
+  }
+
+  const normalizedAlpha = clamp(alpha, 0.01, 1);
+  const problems = smoothConfidenceItems(previous.problems, next.problems, (problem) => problem.type, normalizedAlpha);
+  const detectedSources = smoothConfidenceItems(
+    previous.detectedSources ?? [],
+    next.detectedSources ?? [],
+    (source) => source.source,
+    normalizedAlpha
+  );
+  const sourceEqRecommendations = smoothConfidenceItems(
+    previous.sourceEqRecommendations ?? [],
+    next.sourceEqRecommendations ?? [],
+    (recommendation) => recommendation.source,
+    normalizedAlpha
+  );
+
+  return {
+    ...next,
+    problems,
+    issues: deriveStableIssues(problems, next.issues ?? previous.issues ?? []),
+    detectedSources,
+    sourceEqRecommendations,
+    ml_output: smoothMlOutput(previous.ml_output, next.ml_output, normalizedAlpha),
+    timestamp: Date.now()
+  };
+}
+
+function smoothConfidenceItems<T extends { confidence: number }>(
+  previous: T[],
+  next: T[],
+  keyForItem: (item: T) => string,
+  alpha: number
+) {
+  const previousMap = new Map(previous.map((item) => [keyForItem(item), item]));
+  const nextMap = new Map(next.map((item) => [keyForItem(item), item]));
+  const keys = new Set([...previousMap.keys(), ...nextMap.keys()]);
+  const smoothed: T[] = [];
+
+  keys.forEach((key) => {
+    const previousItem = previousMap.get(key);
+    const nextItem = nextMap.get(key);
+    const smoothedConfidence = nextItem
+      ? previousItem
+        ? (alpha * nextItem.confidence) + ((1 - alpha) * previousItem.confidence)
+        : nextItem.confidence
+      : ((1 - alpha) * (previousItem?.confidence ?? 0));
+
+    if (smoothedConfidence < CONFIDENCE_DECAY_FLOOR) {
+      return;
+    }
+
+    const baseItem = nextItem ?? previousItem;
+
+    if (!baseItem) {
+      return;
+    }
+
+    smoothed.push({
+      ...baseItem,
+      confidence: Number(clamp(smoothedConfidence, 0, 1).toFixed(2))
+    });
+  });
+
+  return smoothed.sort((left, right) => right.confidence - left.confidence);
+}
+
+function smoothMlOutput(
+  previous: AnalysisResult['ml_output'],
+  next: AnalysisResult['ml_output'],
+  alpha: number
+): MlInferenceOutput | undefined {
+  if (!previous) {
+    return next;
+  }
+
+  if (!next) {
+    return previous;
+  }
+
+  const issues = smoothScoreRecord(previous.issues, next.issues, alpha);
+  const sources = smoothScoreRecord(previous.sources, next.sources, alpha);
+  const previousDiagnoses = previous.derived_diagnoses ?? {};
+  const nextDiagnoses = next.derived_diagnoses ?? {};
+  const diagnosisKeys = new Set([...Object.keys(previousDiagnoses), ...Object.keys(nextDiagnoses)]);
+  const derivedDiagnoses: MlInferenceOutput['derived_diagnoses'] = {};
+
+  diagnosisKeys.forEach((key) => {
+    const previousDiagnosis = previousDiagnoses[key];
+    const nextDiagnosis = nextDiagnoses[key];
+    const smoothedScore = nextDiagnosis
+      ? previousDiagnosis
+        ? (alpha * nextDiagnosis.score) + ((1 - alpha) * previousDiagnosis.score)
+        : nextDiagnosis.score
+      : ((1 - alpha) * (previousDiagnosis?.score ?? 0));
+
+    if (smoothedScore < CONFIDENCE_DECAY_FLOOR) {
+      return;
+    }
+
+    const baseDiagnosis = nextDiagnosis ?? previousDiagnosis;
+
+    if (!baseDiagnosis) {
+      return;
+    }
+
+    derivedDiagnoses[key] = {
+      ...baseDiagnosis,
+      score: Number(clamp(smoothedScore, 0, 1).toFixed(4))
+    };
+  });
+
+  return {
+    ...next,
+    issues,
+    sources,
+    derived_diagnoses: derivedDiagnoses
+  };
+}
+
+function smoothScoreRecord(
+  previous: NonNullable<MlInferenceOutput['issues'] | MlInferenceOutput['sources']>,
+  next: NonNullable<MlInferenceOutput['issues'] | MlInferenceOutput['sources']>,
+  alpha: number
+) {
+  const previousEntries = previous ?? {};
+  const nextEntries = next ?? {};
+  const keys = new Set([...Object.keys(previousEntries), ...Object.keys(nextEntries)]);
+  const smoothed: Record<string, number> = {};
+
+  keys.forEach((key) => {
+    const previousValue = previousEntries[key] ?? 0;
+    const nextValue = nextEntries[key];
+    const smoothedValue = nextValue !== undefined
+      ? (alpha * nextValue) + ((1 - alpha) * previousValue)
+      : ((1 - alpha) * previousValue);
+
+    if (smoothedValue < CONFIDENCE_DECAY_FLOOR / 2) {
+      return;
+    }
+
+    smoothed[key] = Number(clamp(smoothedValue, 0, 1).toFixed(4));
+  });
+
+  return smoothed;
+}
+
+function deriveStableIssues(
+  problems: DiagnosticProblem[],
+  fallbackIssues: RuleBasedIssue[]
+) {
+  const stableIssues = problems
+    .filter((problem): problem is DiagnosticProblem & { type: RuleBasedIssue } => (
+      (problem.type === 'muddy' || problem.type === 'harsh' || problem.type === 'buried')
+      && problem.confidence >= 0.35
+    ))
+    .map((problem) => problem.type);
+
+  return stableIssues.length > 0 ? stableIssues : fallbackIssues;
+}
+
 function uniqueInOrder<T>(values: T[]) {
   return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }

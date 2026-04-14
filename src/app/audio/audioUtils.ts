@@ -4,6 +4,10 @@ export const TARGET_SAMPLE_RATE = 16_000;
 export const ROLLING_BUFFER_SECONDS = 3;
 export const ROLLING_BUFFER_SIZE = TARGET_SAMPLE_RATE * ROLLING_BUFFER_SECONDS;
 
+export function getWindowSampleCount(windowSeconds: number, sampleRate = TARGET_SAMPLE_RATE) {
+  return Math.max(1, Math.round(windowSeconds * sampleRate));
+}
+
 /** Convert linear amplitude (0–1) to dBFS. Returns -Infinity for silence. */
 export function linearToDbfs(linear: number): number {
   if (linear <= 0) return -Infinity;
@@ -120,6 +124,21 @@ export function readCircularBuffer(
   output.set(source.subarray(0, filledLength - firstChunk), firstChunk);
 
   return output;
+}
+
+export function readLatestWindowFromCircularBuffer(
+  source: Float32Array,
+  writeIndex: number,
+  filledLength: number,
+  desiredLength: number
+): Float32Array {
+  const nextLength = Math.max(0, Math.min(source.length, filledLength, desiredLength));
+
+  if (nextLength === 0) {
+    return new Float32Array(0);
+  }
+
+  return readCircularBuffer(source, writeIndex, nextLength);
 }
 
 export function calculateRms(samples: Float32Array): number {
