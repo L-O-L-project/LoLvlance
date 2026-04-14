@@ -1,0 +1,6 @@
+{
+  "file": "full_mix_01.wav",
+  "expected_source": ["vocal", "guitar", "bass", "drums", "keys"],
+  "expected_issue": ["muddy", "boomy", "dull"],
+  "severity": "high"
+}

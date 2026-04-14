@@ -1,0 +1,6 @@
+{
+  "file": "vocal_sibilant_01.wav",
+  "expected_source": ["vocal", "keys"],
+  "expected_issue": ["muddy", "harsh", "buried", "thin", "sibilant"],
+  "severity": "high"
+}

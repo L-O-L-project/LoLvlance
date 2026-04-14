@@ -1,0 +1,6 @@
+{
+  "file": "guitar_presence_01.wav",
+  "expected_source": ["keys"],
+  "expected_issue": ["thin"],
+  "severity": "medium"
+}

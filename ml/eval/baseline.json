@@ -1,0 +1,279 @@
+{
+  "critical_labels": [
+    "issue:boomy",
+    "issue:boxy",
+    "issue:buried",
+    "issue:dull",
+    "issue:harsh",
+    "issue:muddy",
+    "issue:nasal",
+    "issue:sibilant",
+    "issue:thin",
+    "source:bass",
+    "source:drums",
+    "source:guitar",
+    "source:keys",
+    "source:vocal"
+  ],
+  "groups": {
+    "combined": {
+      "overall": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 17
+      },
+      "per_label": {
+        "issue:boomy": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:boxy": {
+          "f1": 0.0,
+          "precision": 0.0,
+          "predicted_positive": 0,
+          "recall": 0.0,
+          "support": 0
+        },
+        "issue:buried": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:dull": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:harsh": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:muddy": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 2,
+          "recall": 1.0,
+          "support": 2
+        },
+        "issue:nasal": {
+          "f1": 0.0,
+          "precision": 0.0,
+          "predicted_positive": 0,
+          "recall": 0.0,
+          "support": 0
+        },
+        "issue:sibilant": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:thin": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 2,
+          "recall": 1.0,
+          "support": 2
+        },
+        "source:bass": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:drums": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:guitar": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:keys": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 3,
+          "recall": 1.0,
+          "support": 3
+        },
+        "source:vocal": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 2,
+          "recall": 1.0,
+          "support": 2
+        }
+      }
+    },
+    "issue": {
+      "overall": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 9
+      },
+      "per_label": {
+        "issue:boomy": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:boxy": {
+          "f1": 0.0,
+          "precision": 0.0,
+          "predicted_positive": 0,
+          "recall": 0.0,
+          "support": 0
+        },
+        "issue:buried": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:dull": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:harsh": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:muddy": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 2,
+          "recall": 1.0,
+          "support": 2
+        },
+        "issue:nasal": {
+          "f1": 0.0,
+          "precision": 0.0,
+          "predicted_positive": 0,
+          "recall": 0.0,
+          "support": 0
+        },
+        "issue:sibilant": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "issue:thin": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 2,
+          "recall": 1.0,
+          "support": 2
+        }
+      }
+    },
+    "source": {
+      "overall": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 8
+      },
+      "per_label": {
+        "source:bass": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:drums": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:guitar": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:keys": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 3,
+          "recall": 1.0,
+          "support": 3
+        },
+        "source:vocal": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 2,
+          "recall": 1.0,
+          "support": 2
+        }
+      }
+    }
+  },
+  "min_f1": 0.65,
+  "overall": {
+    "f1": 1.0,
+    "fn": 0,
+    "fp": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "tp": 17
+  },
+  "per_label_f1": {
+    "issue:boomy": 1.0,
+    "issue:boxy": 0.0,
+    "issue:buried": 1.0,
+    "issue:dull": 1.0,
+    "issue:harsh": 1.0,
+    "issue:muddy": 1.0,
+    "issue:nasal": 0.0,
+    "issue:sibilant": 1.0,
+    "issue:thin": 1.0,
+    "source:bass": 1.0,
+    "source:drums": 1.0,
+    "source:guitar": 1.0,
+    "source:keys": 1.0,
+    "source:vocal": 1.0
+  },
+  "regression_tolerance": 0.02,
+  "sample_count": 3
+}
