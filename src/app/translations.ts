@@ -118,7 +118,18 @@ export const translations = {
     increase_target_level: 'Increase target level',
     rebalance_levels: 'Rebalance levels',
     adjust_frequency_overlap: 'Adjust frequency overlap',
-    isolate_problem_source: 'Isolate problem source'
+    isolate_problem_source: 'Isolate problem source',
+
+    // FEEDBACK
+    feedbackPrompt: 'Was this analysis accurate?',
+    feedbackCorrect: 'Yes',
+    feedbackWrong: 'No',
+    feedbackWhatActually: 'What was the actual issue? (optional)',
+    feedbackNoIssue: 'No issue',
+    feedbackSubmit: 'Submit',
+    feedbackThanks: 'Thanks for the feedback',
+    feedbackCollected: 'entries collected',
+    feedbackExport: 'Export'
   },
   ko: {
     appName: 'SoundFix',
@@ -237,7 +248,18 @@ export const translations = {
     increase_target_level: '타겟 레벨 증가',
     rebalance_levels: '레벨 재조정',
     adjust_frequency_overlap: '주파수 겹침 조정',
-    isolate_problem_source: '문제 악기 격리'
+    isolate_problem_source: '문제 악기 격리',
+
+    // FEEDBACK
+    feedbackPrompt: '분석 결과가 정확했나요?',
+    feedbackCorrect: '맞아요',
+    feedbackWrong: '틀려요',
+    feedbackWhatActually: '실제 문제가 무엇이었나요? (선택)',
+    feedbackNoIssue: '문제 없음',
+    feedbackSubmit: '제출',
+    feedbackThanks: '피드백 감사합니다',
+    feedbackCollected: '개 수집됨',
+    feedbackExport: '내보내기'
   }
 };
 

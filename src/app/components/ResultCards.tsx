@@ -5,23 +5,27 @@ import type {
   AnalysisResult,
   DetectedAudioSource,
   DiagnosticProblem,
+  ExtractedAudioFeatures,
   SourceEqRecommendation,
   StemMetric
 } from '../types';
 import { type Language, translations } from '../translations';
+import { FeedbackWidget } from './FeedbackWidget';
 
 interface ResultCardsProps {
   result: AnalysisResult;
   language: Language;
   isLive?: boolean;
+  features?: ExtractedAudioFeatures;
 }
 
-export function ResultCards({ result, language, isLive = false }: ResultCardsProps) {
+export function ResultCards({ result, language, isLive = false, features }: ResultCardsProps) {
   const t = translations[language];
 
   // Handle "no issues" case
   if (result.problems.length === 0) {
     return (
+      <>
       <motion.div
         key="no-issues"
         initial={{ opacity: 0, scale: 0.95 }}
@@ -67,6 +71,8 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
           </div>
         </motion.div>
       </motion.div>
+      <FeedbackWidget result={result} features={features} language={language} />
+    </>
     );
   }
 
@@ -112,6 +118,8 @@ export function ResultCards({ result, language, isLive = false }: ResultCardsPro
           isLive={isLive}
         />
       ))}
+
+      <FeedbackWidget result={result} features={features} language={language} />
     </div>
   );
 }

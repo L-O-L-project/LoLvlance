@@ -205,6 +205,7 @@ export default function App() {
                   result={result}
                   language={language}
                   isLive={appState === 'monitoring'}
+                  features={latestFeatures ?? undefined}
                 />
               )}
             </div>
