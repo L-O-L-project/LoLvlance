@@ -28,7 +28,7 @@ export const PRODUCTION_MODEL_VERSION =
   ?? DEFAULT_PRODUCTION_MODEL_VERSION;
 export const MODEL_VERSION =
   normalizeEnvValue(import.meta.env.VITE_MODEL_VERSION as string | undefined)
-  ?? EXPERIMENTAL_MODEL_VERSION;
+  ?? PRODUCTION_MODEL_VERSION;
 export const ENABLE_MODEL = parseBooleanEnv(
   import.meta.env.VITE_ENABLE_MODEL as string | undefined,
   true

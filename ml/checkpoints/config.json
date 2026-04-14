@@ -1,12 +1,26 @@
 {
   "mel_bins": 64,
+  "model_variant": "teacher",
+  "foundation_channels": 192,
+  "foundation_layers": 6,
+  "foundation_heads": 8,
+  "foundation_ff_dim": 768,
+  "patch_time_stride": 8,
+  "patch_mel_stride": 8,
   "conv_channels": [
-    24,
-    48,
-    72,
-    96
+    32,
+    64,
+    96,
+    128
   ],
-  "hidden_dim": 96,
-  "dropout": 0.15,
+  "hidden_dim": 256,
+  "embedding_dim": 192,
+  "dropout": 0.2,
+  "eq_band_count": 5,
+  "min_eq_hz": 60.0,
+  "max_eq_hz": 8000.0,
+  "max_eq_gain_db": 9.0,
+  "freeze_foundation": false,
+  "source_head_mode": "multilabel",
   "enable_cause_head": false
 }

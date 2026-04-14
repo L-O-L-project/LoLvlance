@@ -1,22 +1,22 @@
 {
   "schema_version": "2.0.0",
   "issue_thresholds": {
-    "muddy": 0.55,
-    "harsh": 0.4,
-    "buried": 0.45,
-    "boomy": 0.6,
-    "thin": 0.45,
-    "boxy": 0.55,
-    "nasal": 0.55,
-    "sibilant": 0.4,
-    "dull": 0.55
+    "muddy": 0.3,
+    "harsh": 0.25,
+    "buried": 0.2,
+    "boomy": 0.2,
+    "thin": 0.2,
+    "boxy": 0.2,
+    "nasal": 0.2,
+    "sibilant": 0.2,
+    "dull": 0.3
   },
   "source_thresholds": {
-    "vocal": 0.5,
-    "guitar": 0.55,
-    "bass": 0.6,
-    "drums": 0.55,
+    "vocal": 0.48,
+    "guitar": 0.5,
+    "bass": 0.48,
+    "drums": 0.48,
     "keys": 0.5
   },
-  "best_epoch": 10
+  "best_epoch": 17
 }
