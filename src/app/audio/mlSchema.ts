@@ -45,10 +45,10 @@ export const ISSUE_DEFAULT_THRESHOLDS: Record<TrainableIssueLabel, number> = {
 
 export const SOURCE_DEFAULT_THRESHOLDS: Record<SourceLabel, number> = {
   vocal: 0.48,
-  guitar: 0.5,
-  bass: 0.48,
-  drums: 0.48,
-  keys: 0.5
+  guitar: 0.9,
+  bass: 0.9,
+  drums: 0.9,
+  keys: 0.9
 };
 
 export const DERIVED_DEFAULT_THRESHOLDS: Record<DerivedDiagnosisType, number> = {

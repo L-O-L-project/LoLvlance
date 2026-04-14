@@ -120,27 +120,16 @@ export function buildDetectedSourcesFromScores(
         source,
         score: sourceScores[source] ?? 0
       }))
-      .filter((entry) => (
-        entry.score >= SOURCE_DEFAULT_THRESHOLDS[entry.source]
-        || entry.score >= MIN_SOURCE_DISPLAY_SCORE
-      ))
+      .filter((entry) => entry.score >= SOURCE_DEFAULT_THRESHOLDS[entry.source])
       .map((entry) => [entry.source, entry.score])
   );
 
-  if (dominantSource && (sourceScores[dominantSource] ?? 0) > 0) {
+  if (dominantSource && (sourceScores[dominantSource] ?? 0) >= SOURCE_DEFAULT_THRESHOLDS[dominantSource]) {
     candidateMap.set(dominantSource, sourceScores[dominantSource] ?? 0);
   }
 
   if (candidateMap.size === 0) {
-    if (!strongestSource || strongestSource.score <= 0) {
-      return [];
-    }
-
-    return [{
-      source: strongestSource.source,
-      confidence: Number(strongestSource.score.toFixed(2)),
-      labels: [`model:${strongestSource.source}`]
-    }] satisfies DetectedAudioSource[];
+    return [];
   }
 
   return [...candidateMap.entries()]
