@@ -139,7 +139,7 @@ function StemServiceStatusCard({
   language: Language;
   centered?: boolean;
 }) {
-  if (!result.stemService) {
+  if (!result.stemService || !result.stemService.connected) {
     return null;
   }
 
