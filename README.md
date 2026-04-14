@@ -1,10 +1,12 @@
 # LoLvlance
 
-LoLvlance is a real-time audio analysis system focused on one product goal:
+LoLvlance is a browser-based audio monitoring system focused on one product goal:
 
-**real-time sound issue detection + EQ recommendation**
+**continuous sound issue detection + EQ guidance for live sessions**
 
 The current implementation captures microphone audio in the browser, extracts audio features locally, runs a lightweight ONNX model in-browser, and combines ML outputs with deterministic rules to produce issue labels, source context, and suggested EQ moves.
+
+In the current browser flow, LoLvlance analyzes a rolling `~3` second window and refreshes guidance about every `~4` seconds. It is best understood as continuous monitoring for worship teams, church sound volunteers, and small live setups that need practical guidance during a session.
 
 ## Quick Links
 
@@ -36,7 +38,7 @@ The current implementation captures microphone audio in the browser, extracts au
 <a id="project-overview"></a>
 ## 1. Project Overview
 
-LoLvlance is designed to answer three questions in real time:
+LoLvlance is designed to help users answer three questions during a live session:
 
 1. What sounds wrong in the signal?
 2. Which source is most likely involved?
@@ -46,6 +48,8 @@ Today, those responsibilities are split across ML and rules:
 
 - **ML** predicts issue probabilities and source probabilities.
 - **Rules** derive source-specific diagnoses, map predictions into EQ suggestions, and provide a fallback path when ML is unavailable.
+
+The current experience is assistive rather than authoritative. LoLvlance is meant to help users decide what to check next, not to claim a perfect diagnosis.
 
 This is a browser-first system. There is no cloud inference path and there is no production data collection pipeline yet.
 
@@ -85,6 +89,12 @@ Mic Input
   Predict `issue_probs` and `source_probs` from log-mel spectrogram input.
 - **Rule role**
   Handle silence gating, derive higher-level diagnoses, project EQ guidance, merge source detections, and recover gracefully if ML is unavailable.
+
+### Current Monitoring Cadence
+
+- Browser analysis window: about `3.0` seconds
+- Monitoring update cadence: about every `4` seconds
+- Product interpretation: continuous monitoring and live session analysis, not instant-response diagnosis
 
 <a id="current-ml-status"></a>
 ## 3. Current ML Status
@@ -206,7 +216,7 @@ Then:
 1. Allow microphone access.
 2. Start monitoring in the UI.
 3. Speak, stay silent, or play audio through speakers.
-4. Watch the UI update with problems, detected sources, and EQ suggestions.
+4. Watch the UI refresh every few seconds with problems, detected sources, and EQ suggestions.
 
 ### Useful Browser Console Logs
 
@@ -256,6 +266,7 @@ npm run build
 ## 7. Known Limitations
 
 - The current model is trained on synthetic data only.
+- The current browser UX analyzes a `~3` second window and updates guidance about every `~4` seconds.
 - There is no real-world validation set or benchmark report yet.
 - There is no data collection or feedback pipeline.
 - EQ is deterministic and rule-based, not learned from supervised EQ targets.
@@ -265,6 +276,7 @@ npm run build
 - Real-world source predictions are not yet reliable enough for production use.
 - Silence is gated before inference. Very quiet inputs return an empty result instead of full ML output.
 - The optional stem service is a separate dependency. If it is not running, the UI may show a stem-service fallback even when browser ML is healthy.
+- The current product should be positioned as continuous monitoring and live session analysis, not as an instant-response diagnosis tool.
 
 <a id="next-steps"></a>
 ## 8. Next Steps
@@ -274,6 +286,7 @@ npm run build
 - Improve source label quality and coverage.
 - Build a held-out real-world evaluation set and report.
 - Calibrate thresholds on real data instead of synthetic validation only.
+- Keep product copy aligned with the current few-seconds monitoring cadence until a faster runtime exists.
 - Decide whether EQ should remain deterministic or later become a learned head.
 - Remove temporary raw tensor logging once browser integration is fully stabilized.
 

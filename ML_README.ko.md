@@ -25,6 +25,12 @@
 [![메인 README](https://img.shields.io/badge/%EB%A9%94%EC%9D%B8-README-111827?style=for-the-badge&logo=gitbook&logoColor=white)](README.ko.md)
 [![개발자 Handover](https://img.shields.io/badge/%EA%B0%9C%EB%B0%9C%EC%9E%90-Handover-111827?style=for-the-badge&logo=files&logoColor=white)](HANDOVER.ko.md)
 
+## 런타임 메모
+
+- 현재 브라우저 제품 흐름은 약 `3.0`초 길이의 롤링 윈도를 분석합니다.
+- 모니터링 패스는 `src/app/hooks/useMonitoring.ts`에서 약 `4`초 간격으로 스케줄됩니다.
+- 제품 관점에서는 이것을 즉시 반응형 동작이 아니라, 연속 모니터링과 라이브 세션 분석으로 설명하는 것이 맞습니다.
+
 <a id="model-architecture"></a>
 ## 1. 모델 아키텍처
 
@@ -437,6 +443,8 @@ frontend는 이 이름들에 정확히 의존합니다.
    상황에 따라 여러 source가 함께 활성화되어야 합니다.
 4. Distorted or harsh audio
    harsh 관련 issue 차원이 어느 정도 반응해야 합니다.
+
+또한 현재 브라우저 런타임은 결과를 몇 초 간격으로만 갱신합니다. 데모에서는 한 시나리오를 재생한 직후 바로 판단하지 말고, 적어도 한 번의 모니터링 패스가 지난 뒤 결과를 확인하는 것이 맞습니다.
 
 ### 현재 평가 결과의 의미
 

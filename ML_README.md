@@ -23,6 +23,12 @@ Korean version: `ML_README.ko.md`
 [![Main README](https://img.shields.io/badge/Main-README-111827?style=for-the-badge&logo=gitbook&logoColor=white)](README.md)
 [![Handover](https://img.shields.io/badge/Developer-Handover-111827?style=for-the-badge&logo=files&logoColor=white)](HANDOVER.md)
 
+## Runtime Note
+
+- The current browser product flow analyzes a rolling `~3.0` second window.
+- Monitoring passes are scheduled on a `~4` second cadence in `src/app/hooks/useMonitoring.ts`.
+- In product terms, this should be positioned as continuous monitoring and live session analysis, not as instant-response behavior.
+
 <a id="model-architecture"></a>
 ## 1. Model Architecture
 
@@ -435,6 +441,8 @@ Recommended browser sanity scenarios:
    Expect multiple sources to activate when appropriate.
 4. Distorted or harsh audio
    Expect some movement in harsh-related issue dimensions.
+
+Also remember that the browser only refreshes results every few seconds in the current runtime. In demos, wait at least one monitoring pass before judging whether a scenario produced the expected change.
 
 ### Current Known Evaluation Outcome
 
