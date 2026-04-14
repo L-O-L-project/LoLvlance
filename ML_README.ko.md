@@ -128,12 +128,59 @@ ML 스택은 이제 순수 규칙 투영 경로가 아니라, real-audio-plus-de
 - `ml/losses.py`
 - `ml/model.py`
 
+### 실제 학습 데이터 확보
+
+`ml/download_datasets.py`를 사용해 지원하는 공개 데이터셋을 다운로드합니다.
+
+```bash
+# 사용 가능한 데이터셋 목록 확인
+python ml/download_datasets.py --list
+
+# MUSAN 다운로드 (~11 GB, 공개 도메인, 권장 시작점)
+python ml/download_datasets.py --datasets musan --output-root data/datasets
+
+# 전부 다운로드 (MUSAN + FSD50K + OpenMIC)
+python ml/download_datasets.py --datasets musan fsd50k openmic --output-root data/datasets
+```
+
+이후 학습:
+
+```bash
+python -m ml.train \
+  --audio-root data/datasets/musan \
+  --musan-root data/datasets/musan \
+  --rebuild-manifest --epochs 20 --export-onnx
+```
+
+`--audio-root`는 WAV/FLAC 파일이 있는 임의 폴더를 받습니다. 파일명에 `vocal`, `guitar`, `drums` 등이 포함되면 `infer_source_targets_from_path`를 통해 자동으로 source 레이블을 부여합니다.
+
+### 사용자 피드백 수집 및 반영
+
+배포 후 사용자는 브라우저에서 per-analysis 피드백을 내보낼 수 있습니다. 이를 학습에 반영하는 방법:
+
+```bash
+python ml/ingest_feedback.py \
+    --feedback lolvlance_feedback_2024-01-15.jsonl \
+    --output ml/artifacts/feedback_manifest.jsonl
+
+# 병합 후 재학습
+cat ml/artifacts/public_dataset_manifest.jsonl \
+    ml/artifacts/feedback_manifest.jsonl \
+    > ml/artifacts/merged_manifest.jsonl
+
+python -m ml.train \
+    --manifest-path ml/artifacts/merged_manifest.jsonl \
+    --epochs 10 --export-onnx
+```
+
+`verdict=correct` 항목은 weak soft label로, `verdict=wrong` + 사용자 선택 레이블 항목은 reviewed hard label로 변환됩니다.
+
 ### 코드 기준 데이터 전략
 
 현재 저장소는 degradation 기반 데이터셋 경로를 지원합니다.
 
-- real source audio manifest에서 시작
-- controlled degradation 적용
+- `--audio-root` 또는 공개 데이터셋 루트로 real source audio manifest 구성
+- 학습 중 `RealAudioDegradationDataset`을 통해 실시간 controlled degradation 적용
 - degraded audio로 issue/source head 학습
 - inverse EQ target으로 EQ head 학습
 
@@ -270,13 +317,16 @@ ml/eval/baseline.json
 - 모델 격리 시스템 존재
 - 모니터링 파이프라인은 의도적인 blind gap 없는 rolling window 사용
 - golden 평가와 integrity 테스트 존재
+- 실제 데이터셋 다운로드 파이프라인 존재 (`ml/download_datasets.py`)
+- 브라우저 피드백 수집 및 수집 파이프라인 존재 (`FeedbackWidget` → `ml/ingest_feedback.py`)
 
 ### 아직 프로덕션 준비가 아닌 부분
 
-- 활성 브라우저 체크포인트
+- 활성 브라우저 체크포인트 (여전히 `v0.0-pipeline-check`)
 - 현재 런타임 아티팩트의 synthetic-data bias
 - real audio에 대한 source reliability
 - real-world benchmark coverage
+- 피드백 수집은 수동 (내보내기 → 스크립트 → 재학습), 아직 자동화되지 않음
 
 ### 올바른 해석
 

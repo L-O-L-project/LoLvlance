@@ -392,8 +392,9 @@ ml/eval/baseline.json
 
 ### 데이터 한계
 
-- 사용자 피드백 루프가 아직 없음
+- 브라우저 측 사용자 피드백 수집 기능이 추가됨 (`FeedbackWidget` + `feedbackStore.ts` + `ml/ingest_feedback.py`) — 단, 수동 내보내기 및 재학습이 필요하며 아직 자동화되지 않음
 - human-reviewed production dataset이 아직 없음
+- real 데이터 학습을 위해선 `ml/download_datasets.py`로 공개 데이터셋을 별도 다운로드해야 함
 - golden 평가 세트가 아직 너무 작음
 
 ### 추론 한계
@@ -472,6 +473,38 @@ $env:PYTHONPATH = (Get-Location).Path
 .\.venv-ml\Scripts\python.exe ml\stem_separation_service.py
 ```
 
+### 공개 데이터셋 다운로드 및 실데이터 학습
+
+```bash
+# 공개 데이터 다운로드 (MUSAN이 가장 간단한 시작점)
+python ml/download_datasets.py --datasets musan --output-root data/datasets
+
+# 실제 오디오로 학습 (--audio-root는 WAV/FLAC 파일이 있는 임의 폴더 허용)
+python -m ml.train \
+  --audio-root data/datasets/musan \
+  --rebuild-manifest --epochs 20 --export-onnx
+
+# 학습 후 브라우저 모델 업데이트
+cp ml/checkpoints/lightweight_audio_model.onnx public/models/
+```
+
+### 사용자 피드백을 학습에 반영
+
+```bash
+# 1. 사용자가 브라우저에서 피드백 내보내기 → lolvlance_feedback_*.jsonl
+# 2. manifest로 변환
+python ml/ingest_feedback.py \
+    --feedback lolvlance_feedback_2024-01-15.jsonl \
+    --output ml/artifacts/feedback_manifest.jsonl
+# 3. 기존 manifest와 병합 후 재학습
+cat ml/artifacts/public_dataset_manifest.jsonl \
+    ml/artifacts/feedback_manifest.jsonl \
+    > ml/artifacts/merged_manifest.jsonl
+python -m ml.train \
+    --manifest-path ml/artifacts/merged_manifest.jsonl \
+    --epochs 10 --export-onnx
+```
+
 ### 모델 승격 체크리스트
 
 1. `ml/checkpoints/` 아래에 후보 체크포인트를 학습 또는 export
@@ -493,7 +526,8 @@ $env:PYTHONPATH = (Get-Location).Path
 
 ### 단기
 
-- real-source 데이터로 학습 전환
+- `ml/download_datasets.py` + `ml/train.py --audio-root`로 real-source 데이터 학습 전환
+- 피드백 수집 사이클 실행: 브라우저 내보내기 → `ml/ingest_feedback.py` → manifest 병합 → 재학습
 - 전처리 및 리샘플링 parity 격차 축소
 - learned EQ 출력을 런타임 계약 쪽으로 더 승격
 - 실제 평가 데이터 기준 calibration 개선
@@ -503,7 +537,7 @@ $env:PYTHONPATH = (Get-Location).Path
 - 실험용 런타임 체크포인트 교체
 - 진짜 프로덕션 모델 롤아웃 경로 추가
 - 브라우저 전용 제약이 문제면 서버 추론 검토
-- 사용자 피드백과 데이터 리뷰 루프 추가
+- 피드백 수집 사이클에 human review 단계 추가
 
 <a id="handover-notes"></a>
 ## 13. 인수인계 메모

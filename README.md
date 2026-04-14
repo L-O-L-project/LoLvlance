@@ -463,6 +463,50 @@ $env:PYTHONPATH = (Get-Location).Path
 .\.venv-ml\Scripts\python.exe ml\stem_separation_service.py
 ```
 
+### Download Public Datasets
+
+```bash
+# List available datasets
+python ml/download_datasets.py --list
+
+# Download MUSAN (~11 GB, easiest starting point)
+python ml/download_datasets.py --datasets musan --output-root data/datasets
+
+# Download all supported datasets
+python ml/download_datasets.py --datasets musan fsd50k openmic --output-root data/datasets
+```
+
+After download, the script prints the exact `ml/train.py` command to run.
+
+### Train on Real Audio
+
+```bash
+python -m ml.train \
+  --audio-root data/datasets/musan \
+  --musan-root data/datasets/musan \
+  --rebuild-manifest --epochs 20 --export-onnx
+```
+
+### Collect and Ingest User Feedback
+
+```bash
+# 1. User clicks "Export" in the browser → lolvlance_feedback_*.jsonl
+
+# 2. Convert to training manifest
+python ml/ingest_feedback.py \
+    --feedback lolvlance_feedback_2024-01-15.jsonl \
+    --output ml/artifacts/feedback_manifest.jsonl
+
+# 3. Merge with existing manifest and retrain
+cat ml/artifacts/public_dataset_manifest.jsonl \
+    ml/artifacts/feedback_manifest.jsonl \
+    > ml/artifacts/merged_manifest.jsonl
+
+python -m ml.train \
+    --manifest-path ml/artifacts/merged_manifest.jsonl \
+    --epochs 10 --export-onnx
+```
+
 ### Model Promotion Flow
 
 1. Train or export a checkpoint under `ml/checkpoints/`
@@ -483,9 +527,10 @@ $env:PYTHONPATH = (Get-Location).Path
 
 ### Data Limitations
 
-- no real production feedback loop exists yet
+- the browser now collects per-analysis user feedback (thumbs up / wrong label) via `FeedbackWidget`, stored locally and exportable as JSONL — but this is a collection mechanism, not a closed loop yet
 - the current golden dataset is too small to act as a complete benchmark
 - synthetic fallback data remains in the repo and can still mislead if treated as a quality signal
+- real public dataset audio must still be downloaded separately before real-data training is possible
 
 ### Inference Limitations
 
@@ -511,7 +556,8 @@ $env:PYTHONPATH = (Get-Location).Path
 
 ### Short Term
 
-- train on real-source audio instead of synthetic fallback data
+- train on real-source audio using `ml/download_datasets.py` + `ml/train.py --audio-root`
+- close the feedback loop: periodically run `ml/ingest_feedback.py` on exported browser feedback and merge into the training manifest
 - promote learned EQ outputs beyond the internal training path
 - expand CI coverage for input integrity and browser-facing regression checks
 - improve threshold calibration on real evaluation audio
@@ -521,7 +567,7 @@ $env:PYTHONPATH = (Get-Location).Path
 - graduate from `v0.0-pipeline-check` to a true production model
 - decide whether browser-only inference remains sufficient
 - add a server inference path if larger models become necessary
-- add real user feedback and review loops
+- add human review step into the feedback ingestion loop
 
 <a id="handover-notes"></a>
 ## 13. Handover Notes

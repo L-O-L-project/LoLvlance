@@ -463,6 +463,50 @@ $env:PYTHONPATH = (Get-Location).Path
 .\.venv-ml\Scripts\python.exe ml\stem_separation_service.py
 ```
 
+### 공개 데이터셋 다운로드
+
+```bash
+# 사용 가능한 데이터셋 목록 확인
+python ml/download_datasets.py --list
+
+# MUSAN 다운로드 (~11 GB, 가장 간단한 시작점)
+python ml/download_datasets.py --datasets musan --output-root data/datasets
+
+# 지원하는 데이터셋 전부 다운로드
+python ml/download_datasets.py --datasets musan fsd50k openmic --output-root data/datasets
+```
+
+다운로드가 완료되면 바로 실행할 수 있는 `ml/train.py` 명령어가 출력됩니다.
+
+### 실제 오디오로 학습
+
+```bash
+python -m ml.train \
+  --audio-root data/datasets/musan \
+  --musan-root data/datasets/musan \
+  --rebuild-manifest --epochs 20 --export-onnx
+```
+
+### 사용자 피드백 수집 및 재학습
+
+```bash
+# 1. 사용자가 브라우저에서 "내보내기" 클릭 → lolvlance_feedback_*.jsonl 저장
+
+# 2. 학습 manifest로 변환
+python ml/ingest_feedback.py \
+    --feedback lolvlance_feedback_2024-01-15.jsonl \
+    --output ml/artifacts/feedback_manifest.jsonl
+
+# 3. 기존 manifest와 합쳐서 재학습
+cat ml/artifacts/public_dataset_manifest.jsonl \
+    ml/artifacts/feedback_manifest.jsonl \
+    > ml/artifacts/merged_manifest.jsonl
+
+python -m ml.train \
+    --manifest-path ml/artifacts/merged_manifest.jsonl \
+    --epochs 10 --export-onnx
+```
+
 ### 모델 승격 절차
 
 1. `ml/checkpoints/` 아래에 후보 체크포인트 학습 또는 export
@@ -483,9 +527,10 @@ $env:PYTHONPATH = (Get-Location).Path
 
 ### 데이터 한계
 
-- 실제 프로덕션 피드백 루프가 아직 없음
+- 브라우저에 `FeedbackWidget`을 통한 per-analysis 사용자 피드백 수집 기능이 추가됨 (맞음/틀린 레이블 선택, JSONL 내보내기) — 수집 메커니즘은 갖춰졌으나 아직 자동화된 닫힌 루프는 아님
 - 현재 golden 데이터셋은 완전한 벤치마크로 쓰기엔 너무 작음
 - synthetic fallback 데이터가 저장소에 남아 있어 품질 신호로 오해될 수 있음
+- real 데이터 학습을 위해선 공개 데이터셋을 별도로 다운로드해야 함
 
 ### 추론 한계
 
@@ -511,7 +556,8 @@ $env:PYTHONPATH = (Get-Location).Path
 
 ### 단기
 
-- synthetic fallback 데이터 대신 real-source 오디오로 학습
+- `ml/download_datasets.py` + `ml/train.py --audio-root`로 real-source 오디오 학습 시작
+- 피드백 루프 주기적 실행: 브라우저 피드백 내보내기 → `ml/ingest_feedback.py` → 학습 manifest 병합
 - learned EQ 출력을 내부 학습 경로에서 더 실제 런타임 계약 쪽으로 끌어오기
 - 입력 정합성과 브라우저 회귀 검사를 CI에서 더 확장
 - 실제 평가 오디오 기준 threshold calibration 개선
@@ -521,7 +567,7 @@ $env:PYTHONPATH = (Get-Location).Path
 - `v0.0-pipeline-check`에서 진짜 프로덕션 모델로 전환
 - 브라우저 전용 추론이 충분한지 재평가
 - 더 큰 모델이 필요하면 서버 추론 경로 추가
-- 실제 사용자 피드백과 리뷰 루프 추가
+- 피드백 수집 루프에 human review 단계 추가
 
 <a id="handover-notes"></a>
 ## 13. 인수인계 메모

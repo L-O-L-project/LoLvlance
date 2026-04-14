@@ -392,8 +392,9 @@ Do not assume that because the tests exist, the problem is solved permanently. T
 
 ### Data Limitations
 
-- no user feedback loop yet
+- browser-side user feedback collection is now in place (`FeedbackWidget` + `feedbackStore.ts` + `ml/ingest_feedback.py`), but it requires manual export and retraining — not yet automated
 - no human-reviewed production dataset yet
+- real public datasets must be downloaded separately via `ml/download_datasets.py` before real-data training is possible
 - golden evaluation set is still too small
 
 ### Inference Limitations
@@ -472,6 +473,38 @@ $env:PYTHONPATH = (Get-Location).Path
 .\.venv-ml\Scripts\python.exe ml\stem_separation_service.py
 ```
 
+### Download Datasets and Train on Real Audio
+
+```bash
+# Download real audio (MUSAN is the simplest starting point)
+python ml/download_datasets.py --datasets musan --output-root data/datasets
+
+# Train on real audio (--audio-root accepts any folder of WAV/FLAC)
+python -m ml.train \
+  --audio-root data/datasets/musan \
+  --rebuild-manifest --epochs 20 --export-onnx
+
+# Update the browser model after training
+cp ml/checkpoints/lightweight_audio_model.onnx public/models/
+```
+
+### Ingest User Feedback into Training
+
+```bash
+# 1. User exports feedback from browser → lolvlance_feedback_*.jsonl
+# 2. Convert to manifest
+python ml/ingest_feedback.py \
+    --feedback lolvlance_feedback_2024-01-15.jsonl \
+    --output ml/artifacts/feedback_manifest.jsonl
+# 3. Merge and retrain
+cat ml/artifacts/public_dataset_manifest.jsonl \
+    ml/artifacts/feedback_manifest.jsonl \
+    > ml/artifacts/merged_manifest.jsonl
+python -m ml.train \
+    --manifest-path ml/artifacts/merged_manifest.jsonl \
+    --epochs 10 --export-onnx
+```
+
 ### Model Promotion Checklist
 
 1. train or export a candidate checkpoint under `ml/checkpoints/`
@@ -493,7 +526,8 @@ $env:PYTHONPATH = (Get-Location).Path
 
 ### Short Term
 
-- move to real-source data for training
+- run `ml/download_datasets.py` + `ml/train.py --audio-root` to move from synthetic to real-data training
+- run feedback ingestion cycle: export browser feedback → `ml/ingest_feedback.py` → merge manifest → retrain
 - close preprocessing and resampling parity gaps
 - promote learned EQ outputs further into runtime-facing contracts
 - improve calibration on real evaluation data
@@ -503,7 +537,7 @@ $env:PYTHONPATH = (Get-Location).Path
 - replace the experimental runtime checkpoint
 - add a true production model rollout path
 - consider server inference if browser-only constraints become limiting
-- add user feedback and data review loops
+- add human review step to the feedback ingestion cycle
 
 <a id="handover-notes"></a>
 ## 13. Handover Notes

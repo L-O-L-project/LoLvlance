@@ -128,12 +128,59 @@ Key files:
 - `ml/losses.py`
 - `ml/model.py`
 
+### Acquiring Real Training Data
+
+Use `ml/download_datasets.py` to download supported public datasets:
+
+```bash
+# List available datasets
+python ml/download_datasets.py --list
+
+# Download MUSAN (~11 GB, public domain, recommended starting point)
+python ml/download_datasets.py --datasets musan --output-root data/datasets
+
+# Download all (MUSAN + FSD50K + OpenMIC)
+python ml/download_datasets.py --datasets musan fsd50k openmic --output-root data/datasets
+```
+
+Then train:
+
+```bash
+python -m ml.train \
+  --audio-root data/datasets/musan \
+  --musan-root data/datasets/musan \
+  --rebuild-manifest --epochs 20 --export-onnx
+```
+
+`--audio-root` accepts any folder of WAV/FLAC files. Files with `vocal`, `guitar`, `drums`, etc. in their names automatically get source labels via `infer_source_targets_from_path`.
+
+### Ingesting User Feedback
+
+After deployment, users can export per-analysis feedback from the browser. Ingest it with:
+
+```bash
+python ml/ingest_feedback.py \
+    --feedback lolvlance_feedback_2024-01-15.jsonl \
+    --output ml/artifacts/feedback_manifest.jsonl
+
+# Merge and retrain
+cat ml/artifacts/public_dataset_manifest.jsonl \
+    ml/artifacts/feedback_manifest.jsonl \
+    > ml/artifacts/merged_manifest.jsonl
+
+python -m ml.train \
+    --manifest-path ml/artifacts/merged_manifest.jsonl \
+    --epochs 10 --export-onnx
+```
+
+Feedback entries with `verdict=correct` become weak soft labels; entries with `verdict=wrong` and user-selected corrected labels become reviewed hard labels.
+
 ### Data Strategy in Code
 
 The repo now supports a degradation-based dataset path:
 
-- start from real source audio manifests
-- apply controlled degradations
+- start from real source audio manifests (via `--audio-root` or public dataset roots)
+- apply controlled degradations at training time via `RealAudioDegradationDataset`
 - train issue/source heads on degraded audio
 - train the EQ head against inverse EQ targets
 
@@ -270,13 +317,16 @@ These tests are meant to make that failure mode visible.
 - model isolation exists
 - monitoring pipeline uses a rolling window with no intentional blind gap
 - golden evaluation and integrity tests exist
+- real dataset download pipeline exists (`ml/download_datasets.py`)
+- browser feedback collection and ingestion pipeline exists (`FeedbackWidget` → `ml/ingest_feedback.py`)
 
 ### What Is Not Production-Ready
 
-- the active browser checkpoint
+- the active browser checkpoint (still `v0.0-pipeline-check`)
 - synthetic-data bias in the current runtime artifact
 - source reliability on real audio
 - real-world benchmark coverage
+- feedback ingestion is manual (export → script → retrain), not automated
 
 ### Correct Interpretation
 
