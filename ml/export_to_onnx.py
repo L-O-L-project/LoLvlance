@@ -15,30 +15,27 @@ except ImportError:  # pragma: no cover
 
 try:
     from .label_schema import get_label_schema
-    from .model import LightweightAudioAnalysisNet, ModelConfig
-    from .onnx_schema_adapter import HierarchicalEqProjection
+    from .model import load_model_from_checkpoint
 except ImportError:
     from label_schema import get_label_schema
-    from model import LightweightAudioAnalysisNet, ModelConfig
-    from onnx_schema_adapter import HierarchicalEqProjection
+    from model import load_model_from_checkpoint
 
 
 class OnnxExportWrapper(torch.nn.Module):
-    def __init__(self, model: LightweightAudioAnalysisNet) -> None:
+    def __init__(self, model: torch.nn.Module) -> None:
         super().__init__()
         self.model = model
-        self.eq_projection = HierarchicalEqProjection()
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         outputs = self.model(x)
-        eq_freq, eq_gain_db = self.eq_projection(outputs["issue_probs"], outputs["source_probs"])
+        eq_params = outputs["eq_params"]
+        eq_freq = eq_params[:, :1, 0]
+        eq_gain_db = eq_params[:, :1, 1]
         return outputs["issue_probs"], outputs["source_probs"], eq_freq, eq_gain_db
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Export the hierarchical LoLvlance model to ONNX."
-    )
+    parser = argparse.ArgumentParser(description="Export the LoLvlance production model to ONNX.")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Path to a trained checkpoint.")
     parser.add_argument(
         "--output",
@@ -54,18 +51,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mel-bins", type=int, default=64, help="Input mel-bin dimension.")
     parser.add_argument("--opset", type=int, default=18, help="ONNX opset version.")
-    parser.add_argument(
-        "--verify",
-        action="store_true",
-        help="Run a post-export onnxruntime verification.",
-    )
+    parser.add_argument("--verify", action="store_true", help="Run a post-export onnxruntime verification.")
     return parser.parse_args()
 
 
 def export_to_onnx(args: argparse.Namespace) -> Path:
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
-    model = build_model(checkpoint=checkpoint, mel_bins=args.mel_bins)
-    load_checkpoint(model, checkpoint)
+    model = load_model_from_checkpoint(checkpoint, mel_bins=args.mel_bins)
     model.eval().cpu()
 
     export_model = OnnxExportWrapper(model).eval().cpu()
@@ -100,49 +92,16 @@ def export_to_onnx(args: argparse.Namespace) -> Path:
 
 
 def export_metadata(onnx_path: Path, checkpoint: Any) -> None:
+    config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
     threshold_payload = checkpoint.get("thresholds", {}) if isinstance(checkpoint, dict) else {}
     schema = get_label_schema(
         issue_thresholds=threshold_payload.get("issue_thresholds"),
         source_thresholds=threshold_payload.get("source_thresholds"),
-    )
+    ).to_dict()
+    schema["eq_band_count"] = int(config.get("eq_band_count", 5))
+    schema["model_variant"] = config.get("model_variant", "student")
     metadata_path = onnx_path.with_suffix(".metadata.json")
-    metadata_path.write_text(json.dumps(schema.to_dict(), indent=2), encoding="utf-8")
-
-
-def build_model(checkpoint: Any, mel_bins: int) -> LightweightAudioAnalysisNet:
-    config_payload = checkpoint.get("config") if isinstance(checkpoint, dict) else None
-    config = ModelConfig.from_dict(config_payload)
-    config.mel_bins = mel_bins
-    return LightweightAudioAnalysisNet(config)
-
-
-def load_checkpoint(model: torch.nn.Module, checkpoint: Any) -> None:
-    state_dict = extract_state_dict(checkpoint)
-    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-
-    if missing_keys:
-        raise RuntimeError(f"Missing keys while loading checkpoint: {missing_keys}")
-
-    if unexpected_keys:
-        raise RuntimeError(f"Unexpected keys while loading checkpoint: {unexpected_keys}")
-
-
-def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
-    if isinstance(checkpoint, dict):
-        if "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
-            return normalize_state_dict_keys(checkpoint["state_dict"])
-        if "model_state_dict" in checkpoint and isinstance(checkpoint["model_state_dict"], dict):
-            return normalize_state_dict_keys(checkpoint["model_state_dict"])
-        if checkpoint and all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
-            return normalize_state_dict_keys(checkpoint)
-
-    raise ValueError(
-        "Unsupported checkpoint format. Expected a raw state_dict or a dict with 'state_dict' / 'model_state_dict'."
-    )
-
-
-def normalize_state_dict_keys(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {key.removeprefix("module."): value for key, value in state_dict.items()}
+    metadata_path.write_text(json.dumps(schema, indent=2), encoding="utf-8")
 
 
 def verify_export(
