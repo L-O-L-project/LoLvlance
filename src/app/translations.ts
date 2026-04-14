@@ -5,11 +5,11 @@ export const translations = {
     appName: 'SoundFix',
     ready: 'Ready',
     listening: 'Listening',
-    result: 'Result',
+    result: 'Preview Result',
     monitoring: 'Monitoring',
-    startAnalysis: 'Start Analysis',
-    analyzing: 'Analyzing...',
-    analyzeAgain: 'Analyze Again',
+    startAnalysis: 'Start Sample Analysis',
+    analyzing: 'Running Sample Analysis...',
+    analyzeAgain: 'Run Sample Analysis Again',
     startMonitoring: 'Start Monitoring',
     stopMonitoring: 'Stop Monitoring',
     liveMonitoring: 'Live Monitoring',
@@ -28,7 +28,7 @@ export const translations = {
     source: 'Source',
     detailedCause: 'Cause',
     details: 'Details',
-    eqRecommendation: 'EQ Recommendation',
+    eqRecommendation: 'Preview Result',
     actions: 'Actions',
     confidenceLevel: 'Confidence',
     confidence: 'Confidence',
@@ -36,7 +36,7 @@ export const translations = {
     stemServiceConnected: 'Stem Service Connected',
     stemServiceFallback: 'Stem Service Fallback',
     stemAnalysis: 'Stem Analysis',
-    sourceEqByInstrument: 'Source EQ by Instrument',
+    sourceEqByInstrument: 'Sample Analysis by Instrument',
     energyShare: 'Energy',
     rmsLevel: 'RMS',
     high: 'High',
@@ -240,3 +240,10 @@ export const translations = {
     isolate_problem_source: '문제 악기 격리'
   }
 };
+
+translations.ko.result = 'Preview Result';
+translations.ko.startAnalysis = 'Start Sample Analysis';
+translations.ko.analyzing = 'Running Sample Analysis...';
+translations.ko.analyzeAgain = 'Run Sample Analysis Again';
+translations.ko.eqRecommendation = 'Preview Result';
+translations.ko.sourceEqByInstrument = 'Sample Analysis by Instrument';

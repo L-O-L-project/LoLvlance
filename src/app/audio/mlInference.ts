@@ -20,6 +20,12 @@ import {
   SOURCE_DEFAULT_THRESHOLDS,
   SOURCE_LABELS
 } from './mlSchema';
+import {
+  ENABLE_MODEL,
+  getConfiguredModelUrl,
+  getModelRuntimeSnapshot,
+  MODEL_VERSION
+} from '../config/modelRuntime';
 import ortWasmJsepModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
 import ortWasmJsepBinaryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
 
@@ -45,21 +51,29 @@ let hasLoggedModelReady = false;
 export { MODEL_MEL_BIN_COUNT };
 
 export async function warmUpMlInference() {
+  if (!ENABLE_MODEL) {
+    console.info('[audio-ml]', createModelLogMetadata({
+      status: 'disabled',
+      reason: 'enableModel=false'
+    }));
+    return false;
+  }
+
   try {
     await getInferenceSession();
 
     if (!hasLoggedModelReady) {
       hasLoggedModelReady = true;
-      console.info('[audio-ml]', {
+      console.info('[audio-ml]', createModelLogMetadata({
         status: 'ready',
         model: getModelUrl(),
         schema: ML_SCHEMA_VERSION
-      });
+      }));
     }
 
     return true;
   } catch (error) {
-    console.warn('[audio-ml] Model warm-up skipped.', error);
+    console.warn('[audio-ml] Model warm-up skipped.', createModelLogMetadata(), error);
     return false;
   }
 }
@@ -67,8 +81,17 @@ export async function warmUpMlInference() {
 export async function analyzeWithMlInference(
   features: ExtractedAudioFeatures
 ): Promise<AnalysisResult | null> {
+  if (!ENABLE_MODEL) {
+    console.info('[audio-ml]', createModelLogMetadata({
+      status: 'skipped',
+      reason: 'enableModel=false'
+    }));
+    return null;
+  }
+
   if (features.melBinCount !== MODEL_MEL_BIN_COUNT) {
     console.warn('[audio-ml] Skipping inference because the mel-bin count does not match the model.', {
+      ...createModelLogMetadata(),
       expectedMelBins: MODEL_MEL_BIN_COUNT,
       receivedMelBins: features.melBinCount
     });
@@ -106,7 +129,7 @@ export async function analyzeWithMlInference(
     logMlInference(result.ml_output);
     return result;
   } catch (error) {
-    console.warn('[audio-ml] Inference failed. Falling back to the rule-based engine.', error);
+    console.warn('[audio-ml] Inference failed. Falling back to the rule-based engine.', createModelLogMetadata(), error);
     return null;
   }
 }
@@ -144,7 +167,7 @@ async function getInferenceSession() {
 }
 
 function getModelUrl() {
-  return new URL(`${import.meta.env.BASE_URL}models/lightweight_audio_model.onnx`, window.location.origin).toString();
+  return getConfiguredModelUrl(import.meta.env.BASE_URL, window.location.origin, MODEL_VERSION);
 }
 
 function parseModelOutputs(
@@ -380,12 +403,12 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function logMlInference(output: AnalysisResult['ml_output']) {
-  console.info('[audio-ml]', {
+  console.info('[audio-ml]', createModelLogMetadata({
     schema_version: output?.schema_version ?? ML_SCHEMA_VERSION,
     issues: output?.issues,
     sources: output?.sources,
     derived_diagnoses: output?.derived_diagnoses
-  });
+  }));
 }
 
 function logRawModelOutputs({
@@ -394,10 +417,18 @@ function logRawModelOutputs({
   modelEqFrequencyNormalized,
   modelEqGainDb
 }: ParsedModelOutputs) {
-  console.info('[audio-ml:raw]', {
+  console.info('[audio-ml:raw]', createModelLogMetadata({
     issue_probs: ISSUE_LABELS.map((label) => Number(issueScores[label].toFixed(4))),
     source_probs: SOURCE_LABELS.map((label) => Number(sourceScores[label].toFixed(4))),
     eq_freq: Number(modelEqFrequencyNormalized.toFixed(4)),
     eq_gain_db: Number(modelEqGainDb.toFixed(4))
-  });
+  }));
+}
+
+function createModelLogMetadata(extra: Record<string, unknown> = {}) {
+  return {
+    ...getModelRuntimeSnapshot(MODEL_VERSION),
+    inferenceTimestamp: new Date().toISOString(),
+    ...extra
+  };
 }

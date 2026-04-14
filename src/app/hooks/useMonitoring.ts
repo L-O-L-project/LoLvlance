@@ -23,6 +23,11 @@ import {
   warmUpMlInference
 } from '../audio/mlInference';
 import {
+  ENABLE_MODEL,
+  getModelRuntimeSnapshot,
+  MODEL_VERSION
+} from '../config/modelRuntime';
+import {
   detectOpenSourceAudioSources,
   warmUpOpenSourceAudioTagger
 } from '../audio/openSourceAudioTagging';
@@ -413,8 +418,11 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     const snapshot = getBufferedAudio();
     const nativeSnapshot = getNativeBufferedAudio();
     const extractedFeatures = extractCurrentFeatures(snapshot);
+    const mlInferencePromise = ENABLE_MODEL
+      ? analyzeWithMlInference(extractedFeatures)
+      : Promise.resolve<AnalysisResult | null>(null);
     const [mlResult, stemAnalysis] = await Promise.all([
-      analyzeWithMlInference(extractedFeatures),
+      mlInferencePromise,
       detectStemSeparatedSources(nativeSnapshot)
     ]);
     const shouldRunFallbackTagger = !stemAnalysis.connected || stemAnalysis.detectedSources.length < 3;
@@ -711,7 +719,15 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   }, [clearMonitoringInterval, stopCapture]);
 
   useEffect(() => {
-    void warmUpMlInference();
+    console.info('[audio-monitoring]', {
+      ...getModelRuntimeSnapshot(MODEL_VERSION),
+      inferenceTimestamp: new Date().toISOString()
+    });
+
+    if (ENABLE_MODEL) {
+      void warmUpMlInference();
+    }
+
     void warmUpStemSeparationService();
     void warmUpOpenSourceAudioTagger();
   }, []);

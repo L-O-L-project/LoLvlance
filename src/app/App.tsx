@@ -5,6 +5,11 @@ import { ResultCards } from './components/ResultCards';
 import { MicrophoneStatusCard } from './components/MicrophoneStatusCard';
 import { type Language, translations } from './translations';
 import { useMonitoring } from './hooks/useMonitoring';
+import {
+  ENABLE_MODEL,
+  isExperimentalModelVersion,
+  MODEL_VERSION
+} from './config/modelRuntime';
 import type {
   AnalysisResult,
   MicrophoneErrorCode,
@@ -39,6 +44,8 @@ export default function App() {
   });
 
   const t = translations[language];
+  const showExperimentalBanner = ENABLE_MODEL && isExperimentalModelVersion(MODEL_VERSION);
+  const showDisabledBanner = !ENABLE_MODEL;
 
   const clearAnalysisTimer = () => {
     if (analysisTimeoutRef.current !== null) {
@@ -152,6 +159,40 @@ export default function App() {
 
           <div className="flex-1 min-h-0 overflow-y-auto">
             <div className="pb-4 space-y-4">
+              {showDisabledBanner && (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                    Sample Analysis
+                  </div>
+                  <div className="mt-2 text-lg font-semibold text-white">
+                    Model disabled
+                  </div>
+                  <div className="mt-1 text-sm text-amber-100/80">
+                    ML inference is turned off. Preview Result uses fallback analysis only.
+                  </div>
+                  <div className="mt-3 text-[11px] font-mono text-amber-200/70">
+                    {MODEL_VERSION}
+                  </div>
+                </div>
+              )}
+
+              {showExperimentalBanner && (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
+                    Experimental Mode
+                  </div>
+                  <div className="mt-2 text-lg font-semibold text-white">
+                    Not production-ready
+                  </div>
+                  <div className="mt-1 text-sm text-amber-100/80">
+                    Results may be inaccurate.
+                  </div>
+                  <div className="mt-3 text-[11px] font-mono text-amber-200/70">
+                    {MODEL_VERSION}
+                  </div>
+                </div>
+              )}
+
               {shouldShowMicrophoneStatus && (
                 <MicrophoneStatusCard
                   error={permissionError as Exclude<MicrophoneErrorCode, null>}
