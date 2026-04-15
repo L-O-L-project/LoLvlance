@@ -34,12 +34,12 @@ export const DERIVED_DIAGNOSIS_LABELS = [
 export const ISSUE_DEFAULT_THRESHOLDS: Record<TrainableIssueLabel, number> = {
   muddy: 0.4,
   harsh: 0.35,
-  buried: 0.2,
+  buried: 0.55,
   boomy: 0.3,
-  thin: 0.2,
+  thin: 0.35,
   boxy: 0.2,
-  nasal: 0.25,
-  sibilant: 0.3,
+  nasal: 0.45,
+  sibilant: 0.48,
   dull: 0.35
 };
 
