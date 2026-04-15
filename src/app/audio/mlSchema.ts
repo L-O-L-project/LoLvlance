@@ -32,23 +32,23 @@ export const DERIVED_DIAGNOSIS_LABELS = [
 ] as const satisfies readonly DerivedDiagnosisType[];
 
 export const ISSUE_DEFAULT_THRESHOLDS: Record<TrainableIssueLabel, number> = {
-  muddy: 0.52,
-  harsh: 0.5,
-  buried: 0.5,
-  boomy: 0.52,
-  thin: 0.5,
-  boxy: 0.5,
-  nasal: 0.5,
-  sibilant: 0.48,
-  dull: 0.5
+  muddy: 0.4,
+  harsh: 0.35,
+  buried: 0.2,
+  boomy: 0.3,
+  thin: 0.2,
+  boxy: 0.2,
+  nasal: 0.25,
+  sibilant: 0.3,
+  dull: 0.35
 };
 
 export const SOURCE_DEFAULT_THRESHOLDS: Record<SourceLabel, number> = {
-  vocal: 0.48,
-  guitar: 0.9,
-  bass: 0.9,
-  drums: 0.9,
-  keys: 0.9
+  vocal: 0.8,
+  guitar: 0.25,
+  bass: 0.8,
+  drums: 0.75,
+  keys: 0.8
 };
 
 export const DERIVED_DEFAULT_THRESHOLDS: Record<DerivedDiagnosisType, number> = {
