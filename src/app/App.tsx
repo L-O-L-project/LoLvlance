@@ -134,20 +134,14 @@ export default function App() {
 
   return (
     /*
-     * Responsive layout strategy:
-     *   Mobile  (<768px)  — edge-to-edge single column, phone-chrome visible
-     *   Tablet  (768–1023px) — centered floating card, single column, no phone chrome
-     *   Desktop (≥1024px) — centered two-column card: EQ viz left, controls right
+     * Mobile-only layout — 360–430px width, always full-screen single column.
+     * No tablet / desktop variants.
      */
-    <div className="min-h-screen bg-[#0a0a0f] text-white md:flex md:items-center md:justify-center md:p-6 lg:p-10">
-      <div className="
-        w-full min-h-screen
-        md:min-h-0 md:max-w-[680px] md:rounded-3xl md:shadow-2xl md:border md:border-gray-800/50
-        lg:max-w-[1200px] lg:rounded-2xl lg:min-h-[720px]
-        bg-[#0f0f14] flex flex-col relative overflow-hidden
-      ">
-        {/* Phone status-bar spacer — mobile only */}
-        <div className="h-12 flex-shrink-0 md:hidden" />
+    <div className="min-h-screen bg-[#0a0a0f] text-white">
+      <div className="w-full min-h-screen bg-[#0f0f14] flex flex-col overflow-hidden">
+
+        {/* Status-bar safe-area spacer */}
+        <div className="h-12 flex-shrink-0" />
 
         <Header
           state={appState}
@@ -158,63 +152,54 @@ export default function App() {
           showPulse={headerStatus.showPulse}
         />
 
-        {/* Body: stacked on mobile/tablet, side-by-side on desktop */}
-        <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+        {/* Body — stacked single column */}
+        <div className="flex-1 flex flex-col min-h-0">
 
-          {/* EQ Visualization — inline on mobile/tablet, left panel on desktop */}
-          <div className="
-            flex-shrink-0 flex justify-center px-6 mb-4
-            md:px-8 md:mb-6
-            lg:w-[480px] lg:border-r lg:border-gray-800/40
-            lg:flex lg:items-center lg:justify-center
-            lg:px-8 lg:py-10 lg:mb-0
-          ">
-            {/* Width cap on tablet so the viz doesn't stretch to 616px */}
-            <div className="w-full md:max-w-[480px] lg:max-w-none">
-              <EQVisualization
-                analyserNode={analyserNode}
-                featureRms={appState === 'idle' ? null : latestFeatures?.rms ?? null}
-                problems={result?.problems || []}
-                isLive={appState === 'monitoring' || appState === 'listening'}
-                state={appState}
-              />
-            </div>
+          {/* EQ Visualization */}
+          <div className="flex-shrink-0 px-4 mb-3">
+            <EQVisualization
+              analyserNode={analyserNode}
+              featureRms={appState === 'idle' ? null : latestFeatures?.rms ?? null}
+              problems={result?.problems || []}
+              isLive={appState === 'monitoring' || appState === 'listening'}
+              state={appState}
+            />
           </div>
 
-          {/* Content + Actions */}
-          <div className="flex-1 flex flex-col px-6 pb-8 md:px-8 lg:px-8 lg:pt-4 lg:pb-8 min-h-0">
+          {/* Scrollable content + sticky CTA */}
+          <div className="flex-1 flex flex-col px-4 pb-4 min-h-0">
             <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="pb-4 space-y-3 md:space-y-4">
+              <div className="pb-3 space-y-3">
 
                 {showDisabledBanner && (
-                  <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 md:p-5">
+                  <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
                       Sample Analysis
                     </div>
-                    <div className="mt-2 text-base md:text-lg font-semibold text-white">
+                    <div className="mt-1.5 text-base font-semibold text-white">
                       Model disabled
                     </div>
                     <div className="mt-1 text-sm text-amber-100/80">
                       ML inference is turned off. Preview Result uses fallback analysis only.
                     </div>
-                    <div className="mt-3 text-[11px] font-mono text-amber-200/70">
+                    <div className="mt-2 text-[11px] font-mono text-amber-200/70">
                       {MODEL_VERSION}
                     </div>
                   </div>
                 )}
 
                 {showExperimentalBanner && (
-                  <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 md:p-5">
+                  <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200">
                       Experimental Mode
                     </div>
-                    <div className="mt-2 text-base md:text-lg font-semibold text-white">
+                    <div className="mt-1.5 text-base font-semibold text-white">
                       Not production-ready
                     </div>
                     <div className="mt-1 text-sm text-amber-100/80">
                       Results may be inaccurate.
                     </div>
-                    <div className="mt-3 text-[11px] font-mono text-amber-200/70">
+                    <div className="mt-2 text-[11px] font-mono text-amber-200/70">
                       {MODEL_VERSION}
                     </div>
                   </div>
@@ -249,8 +234,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Home-indicator bar — mobile only */}
-        <div className="h-8 flex items-center justify-center flex-shrink-0 md:hidden">
+        {/* Home-indicator bar */}
+        <div className="h-8 flex items-center justify-center flex-shrink-0">
           <div className="w-32 h-1 bg-white/20 rounded-full" />
         </div>
       </div>

@@ -45,7 +45,7 @@ export function AudioVisualization({ state }: AudioVisualizationProps) {
         )}
         
         {/* Visualization Bars */}
-        <div className="relative flex items-end justify-center gap-3 h-32 md:h-40 lg:h-48">
+        <div className="relative flex items-end justify-center gap-3 h-36">
           {bars.map((height, index) => (
             <motion.div
               key={index}

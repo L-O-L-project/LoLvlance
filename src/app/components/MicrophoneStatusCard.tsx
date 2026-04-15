@@ -30,14 +30,14 @@ export function MicrophoneStatusCard({ error, language }: MicrophoneStatusCardPr
       animate={{ opacity: 1, y: 0 }}
       className="w-full"
     >
-      <div className="bg-gradient-to-br from-amber-500/10 to-red-500/10 border border-amber-500/30 rounded-2xl p-4 md:p-5">
-        <div className="flex items-start gap-3 md:gap-4">
-          <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-amber-500/15 flex items-center justify-center flex-shrink-0">
-            <MicOff className="w-5 h-5 md:w-6 md:h-6 text-amber-300" />
+      <div className="bg-gradient-to-br from-amber-500/10 to-red-500/10 border border-amber-500/30 rounded-2xl p-4">
+        <div className="flex items-start gap-3">
+          <div className="w-11 h-11 rounded-full bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+            <MicOff className="w-5 h-5 text-amber-300" />
           </div>
 
-          <div className="space-y-1.5 md:space-y-2">
-            <div className="text-sm md:text-base font-semibold text-amber-200">
+          <div className="space-y-1.5">
+            <div className="text-sm font-semibold text-amber-200">
               {title}
             </div>
             <div className="text-sm text-gray-300 leading-relaxed">

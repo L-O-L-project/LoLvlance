@@ -35,9 +35,9 @@ export function Header({
   };
 
   return (
-    <div className="px-6 py-4 md:px-8 md:py-5 lg:py-6 flex items-center justify-between">
+    <div className="px-5 py-3 flex items-center justify-between">
       <div>
-        <h1 className="text-xl lg:text-2xl font-semibold tracking-tight">{t.appName}</h1>
+        <h1 className="text-lg font-semibold tracking-tight">{t.appName}</h1>
       </div>
 
       <div className="flex items-center gap-3">
@@ -52,7 +52,7 @@ export function Header({
 
         <button
           onClick={onToggleLanguage}
-          className="w-8 h-8 md:w-10 md:h-10 rounded-lg bg-gray-800 hover:bg-gray-700 transition-colors flex items-center justify-center"
+          className="w-11 h-11 rounded-xl bg-gray-800 active:bg-gray-700 transition-colors flex items-center justify-center"
           aria-label="Toggle language"
         >
           <Languages className="w-4 h-4 text-gray-400" />

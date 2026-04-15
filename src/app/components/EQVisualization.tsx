@@ -225,7 +225,7 @@ export function EQVisualization({
         </div>
       </div>
 
-      <div className="rounded-lg border border-gray-800/80 bg-[#07090c] p-2 md:p-2.5 space-y-2">
+      <div className="rounded-lg border border-gray-800/80 bg-[#07090c] p-2 space-y-2">
         {/* Oscilloscope row */}
         <div className="grid grid-cols-[24px_1fr] gap-2">
           <div className="flex flex-col justify-between py-1 text-[8px] font-mono text-gray-500">
@@ -244,7 +244,7 @@ export function EQVisualization({
               </div>
             </div>
 
-            <div className="relative h-12 md:h-16 lg:h-20">
+            <div className="relative h-14">
               <canvas ref={scopeCanvasRef} className="absolute inset-0 w-full h-full" />
             </div>
           </div>
@@ -269,7 +269,7 @@ export function EQVisualization({
               </div>
             </div>
 
-            <div className="relative h-20 md:h-24 lg:h-32">
+            <div className="relative h-24">
               {/* Canvas: EQ grid + RTA spectrum */}
               <canvas ref={analyzerCanvasRef} className="absolute inset-0 w-full h-full" />
 
@@ -381,7 +381,7 @@ export function EQVisualization({
                 RMS
               </div>
 
-              <div className="relative h-20 md:h-24 lg:h-32">
+              <div className="relative h-24">
                 <canvas ref={meterCanvasRef} className="absolute inset-0 w-full h-full" />
               </div>
 

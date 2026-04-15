@@ -38,7 +38,7 @@ export function ResultCards({ result, language, isLive = false, features }: Resu
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-br from-green-600/20 to-emerald-600/20 border border-green-500/30 rounded-2xl p-6 md:p-8 text-center"
+          className="bg-gradient-to-br from-green-600/20 to-emerald-600/20 border border-green-500/30 rounded-2xl p-6 text-center"
         >
           <div className="flex flex-col items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
@@ -418,7 +418,7 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
           isPrimary
             ? 'bg-gradient-to-br from-purple-600/20 to-blue-600/20 border border-purple-500/30'
             : 'bg-gray-800/50 border border-gray-700/50'
-        } rounded-2xl p-4 md:p-6`}
+        } rounded-2xl p-4`}
       >
         <div className="flex items-start gap-3">
           <div
@@ -434,7 +434,7 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
             </div>
             <motion.div
               layout={isLive}
-              className={`${isPrimary ? 'text-xl md:text-2xl' : 'text-lg md:text-xl'} font-bold`}
+              className={`${isPrimary ? 'text-xl' : 'text-lg'} font-bold`}
             >
               {t[problem.type as keyof typeof t] || problem.type}
             </motion.div>

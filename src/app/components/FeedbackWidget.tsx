@@ -75,26 +75,24 @@ export function FeedbackWidget({ result, features, language }: FeedbackWidgetPro
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.2 }}
-            className="flex flex-col gap-2 px-4 py-3 bg-gray-800/40 border border-gray-700/50 rounded-xl sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+            className="px-4 py-3 bg-gray-800/40 border border-gray-700/50 rounded-xl space-y-2.5"
           >
-            <span className="text-xs text-gray-400">
+            <span className="block text-xs text-gray-400">
               {t.feedbackPrompt}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex gap-2">
               <button
                 onClick={handleCorrect}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500/20 active:bg-green-500/30 transition-colors text-xs font-medium"
-                title={t.feedbackCorrect}
+                className="flex-1 flex items-center justify-center gap-2 h-11 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 active:bg-green-500/30 transition-colors text-sm font-medium"
               >
-                <ThumbsUp className="w-3.5 h-3.5" />
+                <ThumbsUp className="w-4 h-4" />
                 {t.feedbackCorrect}
               </button>
               <button
                 onClick={handleWrong}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-colors text-xs font-medium"
-                title={t.feedbackWrong}
+                className="flex-1 flex items-center justify-center gap-2 h-11 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 active:bg-red-500/30 transition-colors text-sm font-medium"
               >
-                <ThumbsDown className="w-3.5 h-3.5" />
+                <ThumbsDown className="w-4 h-4" />
                 {t.feedbackWrong}
               </button>
             </div>
@@ -111,13 +109,13 @@ export function FeedbackWidget({ result, features, language }: FeedbackWidgetPro
             className="px-4 py-3 bg-gray-800/40 border border-red-500/20 rounded-xl space-y-3"
           >
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-300">{t.feedbackWhatActually}</span>
+              <span className="text-sm text-gray-300 font-medium">{t.feedbackWhatActually}</span>
               <button
                 onClick={dismiss}
-                className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-500 hover:text-gray-300 hover:bg-gray-700/40 active:bg-gray-700/60 transition-colors"
+                className="w-10 h-10 flex items-center justify-center rounded-xl text-gray-500 active:bg-gray-700/60 transition-colors"
                 aria-label="Dismiss"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -127,10 +125,10 @@ export function FeedbackWidget({ result, features, language }: FeedbackWidgetPro
                   <button
                     key={label}
                     onClick={() => toggleLabel(label)}
-                    className={`px-3 min-h-[36px] rounded-lg text-xs font-medium border transition-colors ${
+                    className={`px-3 h-10 rounded-xl text-sm font-medium border transition-colors ${
                       active
                         ? 'bg-red-500/20 border-red-500/40 text-red-300'
-                        : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:border-gray-500/60 active:bg-gray-700/60'
+                        : 'bg-gray-700/40 border-gray-600/40 text-gray-400 active:bg-gray-700/60'
                     }`}
                   >
                     {t[label as keyof typeof t] ?? label}
@@ -140,10 +138,10 @@ export function FeedbackWidget({ result, features, language }: FeedbackWidgetPro
               <button
                 key="none"
                 onClick={() => toggleLabel('none')}
-                className={`px-3 min-h-[36px] rounded-lg text-xs font-medium border transition-colors ${
+                className={`px-3 h-10 rounded-xl text-sm font-medium border transition-colors ${
                   selected.has('none')
                     ? 'bg-red-500/20 border-red-500/40 text-red-300'
-                    : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:border-gray-500/60 active:bg-gray-700/60'
+                    : 'bg-gray-700/40 border-gray-600/40 text-gray-400 active:bg-gray-700/60'
                 }`}
               >
                 {t.feedbackNoIssue}
@@ -151,7 +149,7 @@ export function FeedbackWidget({ result, features, language }: FeedbackWidgetPro
             </div>
             <button
               onClick={submitWrong}
-              className="w-full min-h-[44px] sm:min-h-0 sm:py-2 rounded-lg bg-red-500/15 border border-red-500/30 text-red-300 hover:bg-red-500/25 active:bg-red-500/35 transition-colors text-xs font-medium"
+              className="w-full h-11 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 active:bg-red-500/35 transition-colors text-sm font-medium"
             >
               {t.feedbackSubmit}
             </button>
@@ -172,7 +170,7 @@ export function FeedbackWidget({ result, features, language }: FeedbackWidgetPro
             </span>
             <button
               onClick={downloadFeedback}
-              className="flex items-center gap-1.5 px-3 min-h-[36px] rounded-lg bg-gray-700/40 border border-gray-600/40 text-gray-400 hover:bg-gray-700/60 active:bg-gray-700/80 transition-colors text-xs"
+              className="flex items-center gap-1.5 px-3 h-10 rounded-xl bg-gray-700/40 border border-gray-600/40 text-gray-400 active:bg-gray-700/80 transition-colors text-xs"
               title={t.feedbackExport}
             >
               <Download className="w-3.5 h-3.5" />
