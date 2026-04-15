@@ -220,15 +220,44 @@ def pad_or_trim(waveform: np.ndarray, target_length: int) -> np.ndarray:
 
 
 def resample_audio(waveform: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
-    if source_rate == target_rate or waveform.size == 0:
-        return np.asarray(waveform, dtype=np.float32)
+    """Resample waveform to target_rate.
 
-    duration_seconds = waveform.shape[0] / float(source_rate)
-    target_length = max(1, int(round(duration_seconds * target_rate)))
-    source_positions = np.linspace(0.0, duration_seconds, num=waveform.shape[0], endpoint=False)
-    target_positions = np.linspace(0.0, duration_seconds, num=target_length, endpoint=False)
-    resampled = np.interp(target_positions, source_positions, waveform)
-    return np.asarray(resampled, dtype=np.float32)
+    Mirrors the JavaScript resampleMonoBuffer() in audioUtils.ts exactly:
+    - Upsampling  (source < target): linear interpolation between adjacent samples.
+    - Downsampling (source > target): block average — each output sample is the
+      mean of the input samples that fall in its time slot.  This matches the
+      Web Audio API's behaviour and keeps Python/browser feature parity.
+    """
+    waveform = np.asarray(waveform, dtype=np.float32)
+
+    if source_rate == target_rate or waveform.size == 0:
+        return waveform.copy()
+
+    ratio = source_rate / target_rate
+    output_length = max(1, int(round(waveform.shape[0] / ratio)))
+
+    if source_rate < target_rate:
+        # Upsampling — linear interpolation (matches JS branch)
+        output = np.empty(output_length, dtype=np.float32)
+        for index in range(output_length):
+            position = index * ratio
+            base = int(position)
+            nxt = min(base + 1, waveform.shape[0] - 1)
+            frac = position - base
+            output[index] = waveform[base] + (waveform[nxt] - waveform[base]) * frac
+        return output
+
+    # Downsampling — block average (matches JS branch)
+    output = np.empty(output_length, dtype=np.float32)
+    input_offset = 0
+    for index in range(output_length):
+        next_offset = min(waveform.shape[0], int(round((index + 1) * ratio)))
+        segment = waveform[input_offset:next_offset]
+        output[index] = float(segment.mean()) if segment.size else float(
+            waveform[min(input_offset, waveform.shape[0] - 1)]
+        )
+        input_offset = next_offset
+    return output
 
 
 def next_power_of_two(value: int) -> int:
