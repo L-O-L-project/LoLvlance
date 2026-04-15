@@ -7,10 +7,10 @@ It is written to help the next engineer understand what is actually implemented,
 The short version is:
 
 - the browser monitoring path is working end to end
-- the current browser model is intentionally isolated as `v0.0-pipeline-check`
-- the runtime now uses rolling-window monitoring with no intentional blind gap
-- golden evaluation and input-integrity test infrastructure now exist
-- the active model still should not be treated as production AI
+- the active browser model is `v0.1-real-data` — the first real-data trained checkpoint, trained on MUSAN + OpenMIC-2018 (65K clips)
+- the runtime uses rolling-window monitoring with no intentional blind gap
+- golden evaluation and input-integrity test infrastructure exist and are CI-gated
+- the pipeline is trustworthy; the model is functional on real audio but not perfect on all labels
 
 Korean version: `HANDOVER.ko.md`
 
@@ -108,18 +108,21 @@ There are now two different ML layers to understand:
 
 ### Active Browser Model
 
-The current browser model is intentionally isolated as:
+The current browser model is:
 
 ```text
-v0.0-pipeline-check
+v0.1-real-data
 ```
 
 This model:
 
-- is synthetic-data-trained
-- is not production-ready
-- exists to validate the runtime path, export path, and browser integration
-- must not be treated as trustworthy real-world audio intelligence
+- was trained on real public audio (MUSAN + OpenMIC-2018, 65,738 clips)
+- is the first real-data checkpoint deployed to the browser
+- has been validated through the CI golden evaluation gate
+- produces meaningful predictions: guitar F1=0.82, drums AUROC=0.93, vocal AUROC=0.92, muddy AUROC=0.87
+- has known weak spots: `boxy` F1=0.0, `nasal`/`thin`/`sibilant` AUROC near 0.56–0.60
+
+See `ml/model_history.md` for full per-label metrics and artifact paths.
 
 ### Current Browser ONNX Contract
 
@@ -157,14 +160,24 @@ The browser now has a model isolation layer.
 
 ### Runtime Defaults
 
-- default experimental version: `v0.0-pipeline-check`
-- reserved production version: `v0.1-real-data`
-- default experimental model path: `public/models/lightweight_audio_model.onnx`
-- reserved production path: `public/models/lightweight_audio_model.production.onnx`
+- active default version: `v0.1-real-data` (PRODUCTION)
+- archived experimental version: `v0.0-pipeline-check`
+- active production model path: `public/models/lightweight_audio_model.production.onnx`
+- archived experimental model path: `public/models/lightweight_audio_model.onnx`
 
 Source of truth:
 
 - `src/app/config/modelRuntime.ts`
+
+### Model History
+
+Three model generations have been trained. See `ml/model_history.md` for full details.
+
+| Version | Status | Data | Notes |
+|---|---|---|---|
+| `v0.0-pipeline-check` | Archived | Synthetic | Pipeline validation only |
+| `v0.1-real-data` | **Active** | MUSAN + OpenMIC (65K) | Current default |
+| `v0.2-fsd50k-extended` | In training | + FSD50K partial | ETA: TBD |
 
 ### Runtime Controls
 
@@ -174,19 +187,13 @@ Source of truth:
 Behavior:
 
 - `ENABLE_MODEL=false` disables ML inference entirely
-- `MODEL_VERSION === "v0.0-pipeline-check"` routes to the experimental model artifact
-- `MODEL_VERSION === "v0.1-real-data"` routes to the production artifact path
-- any other non-experimental version can also route to the production artifact path
+- `MODEL_VERSION === "v0.0-pipeline-check"` routes to the archived experimental artifact
+- `MODEL_VERSION === "v0.1-real-data"` (default) routes to the production artifact path
+- any other non-experimental version also routes to the production artifact path
 
 ### User-Facing Safety Layer
 
-The app UI now surfaces the model state:
-
-- `Experimental Mode`
-- `Not production-ready`
-- `Results may be inaccurate`
-
-This safety banner is intentional and should not be removed until a genuinely production-ready checkpoint exists.
+The experimental safety banner (`Experimental Mode`, `Not production-ready`) is only shown when `MODEL_VERSION === "v0.0-pipeline-check"`. With the default `v0.1-real-data`, the banner is not shown.
 
 <a id="audio-pipeline"></a>
 ## 5. Audio Pipeline
@@ -388,9 +395,10 @@ Do not assume that because the tests exist, the problem is solved permanently. T
 
 ### Model Limitations
 
-- active browser model is still `v0.0-pipeline-check`
-- synthetic data bias remains a real risk
-- source predictions are not production-trustworthy
+- active browser model is `v0.1-real-data` — real-data trained but not perfect on all labels
+- `boxy` F1=0.0 (only 23 val samples); `nasal`, `thin`, `sibilant` AUROC near chance (0.56–0.60)
+- guitar threshold is low (0.25) due to dataset imbalance — may over-predict on non-guitar audio
+- CI golden set has only 3 samples; threshold calibration is conservative for this small set
 - browser runtime still uses a compatibility single-band EQ output contract
 
 ### Data Limitations
@@ -528,23 +536,20 @@ python -m ml.train \
 
 ### Immediate
 
-- keep product claims aligned with the actual runtime
-- maintain strict isolation of `v0.0-pipeline-check`
-- expand the golden set
+- monitor `v0.2-fsd50k-extended` training (PID 58050, log: `ml/train_fsd50k.log`) and evaluate on completion
+- expand the golden evaluation set beyond 3 samples
 - keep input-integrity tests part of the release process
 
 ### Short Term
 
-- run `ml/download_datasets.py` + `ml/train.py --audio-root` to move from synthetic to real-data training
+- evaluate `v0.2-fsd50k-extended` against baseline; promote if `boxy`/`nasal`/`thin` improve
 - run feedback ingestion cycle: export browser feedback → `ml/ingest_feedback.py` → merge manifest → retrain
-- close preprocessing and resampling parity gaps
+- improve threshold calibration with a larger golden evaluation set
 - promote learned EQ outputs further into runtime-facing contracts
-- improve calibration on real evaluation data
 
 ### Longer Term
 
-- replace the experimental runtime checkpoint
-- add a true production model rollout path
+- graduate from single-band browser EQ contract to multi-band EQ output
 - consider server inference if browser-only constraints become limiting
 - add human review step to the feedback ingestion cycle
 
@@ -566,10 +571,10 @@ python -m ml.train \
 
 ### Practical Rules for the Next Engineer
 
-- do not remove experimental banners until the model status actually changes
-- do not call the active browser model production-ready
+- do not promote a new model checkpoint without running `ml/eval/evaluate.py` and confirming CI passes
+- do not remove the experimental banner code — it will auto-activate if `MODEL_VERSION` is set back to `v0.0-pipeline-check`
 - do not assume preprocessing parity without running the tests
-- do not replace the public ONNX artifact without rerunning evaluation
+- do not replace the public ONNX artifact without rerunning evaluation and updating `ml/model_history.md`
 
 ### Most Important Mental Model
 
@@ -578,5 +583,4 @@ There is a difference between:
 - **the pipeline works**
 - **the model is trustworthy**
 
-Today, the first statement is true.
-The second statement is not yet true.
+As of Apr 15, 2026, both statements are true for `v0.1-real-data`. The model was trained on real public audio, passed CI evaluation, and is the active default. It is not perfect on all labels — `boxy`, `nasal`, and `thin` need more training data — but it is no longer synthetic-data-only.

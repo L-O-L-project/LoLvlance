@@ -112,26 +112,40 @@ LoLvlance now has an explicit model isolation layer.
 
 ### Current Runtime Defaults
 
-- active default model version: `v0.0-pipeline-check`
-- reserved production version: `v0.1-real-data`
+- active default model version: `v0.1-real-data`
+- experimental (archived) version: `v0.0-pipeline-check`
 - config file: `src/app/config/modelRuntime.ts`
-- default browser model path: `public/models/lightweight_audio_model.onnx`
-- reserved production path: `public/models/lightweight_audio_model.production.onnx`
+- active production model path: `public/models/lightweight_audio_model.production.onnx`
+- archived experimental model path: `public/models/lightweight_audio_model.onnx`
 
 ### Current Model Status
 
-The active browser model is intentionally marked as:
+The active browser model is:
 
 ```text
-v0.0-pipeline-check
+v0.1-real-data
 ```
 
-This means:
+This model:
 
-- it is a pipeline-validation artifact
-- it is not production-ready
-- it was trained on synthetic data with known bias issues
-- its outputs may be inaccurate on real voice and music
+- was trained on real public audio (MUSAN + OpenMIC-2018, 65,738 clips)
+- is the first real-data checkpoint deployed to the browser
+- has been validated against the CI golden evaluation gate
+- source detection is functional: guitar F1=0.82, drums AUROC=0.93, vocal AUROC=0.92
+
+See `ml/model_history.md` for full per-label metrics, artifact paths, and known limitations.
+
+### Model History
+
+Three model generations have been trained:
+
+| Version | Status | Data | Best Metric |
+|---|---|---|---|
+| `v0.0-pipeline-check` | Archived | Synthetic | Pipeline validation only |
+| `v0.1-real-data` | **Active** | MUSAN + OpenMIC (65K clips) | Guitar F1=0.82, macro issue F1=0.53 |
+| `v0.2-fsd50k-extended` | In training | + FSD50K partial (85K clips) | TBD |
+
+Full history: `ml/model_history.md`
 
 ### Kill Switch and Routing
 
@@ -143,17 +157,13 @@ The frontend runtime supports:
 Behavior:
 
 - if `ENABLE_MODEL=false`, browser ML is skipped and the app uses fallback analysis only
-- if `MODEL_VERSION === "v0.0-pipeline-check"`, the experimental model path is used
-- if `MODEL_VERSION === "v0.1-real-data"`, the production model path is used
+- if `MODEL_VERSION === "v0.0-pipeline-check"`, the archived experimental model path is used
+- if `MODEL_VERSION === "v0.1-real-data"` (default), the production model path is used
 - other non-experimental version strings also route to the production model path
 
 ### UI Status
 
-The current UI explicitly warns when the experimental model is active:
-
-- `Experimental Mode`
-- `Not production-ready`
-- `Results may be inaccurate`
+The UI no longer shows experimental warnings when the production model is active. Experimental warnings (`Not production-ready`, `Results may be inaccurate`) only appear when `MODEL_VERSION === "v0.0-pipeline-check"`.
 
 <a id="ml-system"></a>
 ## 4. ML System
@@ -162,14 +172,14 @@ There are now two different ways to think about the ML system:
 
 ### Active Browser Runtime
 
-The browser currently serves an **experimental checkpoint** and consumes a compatibility ONNX contract:
+The browser serves the `v0.1-real-data` checkpoint and consumes a compatibility ONNX contract:
 
 - `issue_probs`
 - `source_probs`
 - `eq_freq`
 - `eq_gain_db`
 
-That runtime path is isolated for safety and should not be treated as production AI.
+This model was trained on real public audio and has been validated through the CI evaluation gate. It produces meaningful source and issue predictions on real-world audio.
 
 ### Python Training Path
 
@@ -185,15 +195,15 @@ Current code supports:
 - self-supervised degradation training in `ml/degradation.py`
 - distillation-ready losses in `ml/losses.py`
 
-### Important Distinction
+### Current Reality
 
-The training code is ahead of the active browser model.
+The active browser model (`v0.1-real-data`) is the first real-data checkpoint. It proves:
 
-Today:
+- the pipeline works end to end
+- source detection is functional on real audio
+- issue detection generalizes beyond synthetic data
 
-- the **codebase** supports a more capable learning-based path
-- the **active browser checkpoint** is still `v0.0-pipeline-check`
-- the **runtime product claim** must therefore stay conservative
+The model is still conservative on some issue labels (`boxy`, `nasal`, `thin`) where training data was sparse. A follow-up training run with FSD50K added is currently in progress (`v0.2-fsd50k-extended`).
 
 <a id="audio-pipeline"></a>
 ## 5. Audio Pipeline
@@ -535,10 +545,11 @@ python -m ml.train \
 
 ### Model Limitations
 
-- the active browser model is `v0.0-pipeline-check`
-- it is synthetic-data-trained and not production-ready
-- source predictions remain especially vulnerable to dataset bias
-- browser runtime still uses a compatibility EQ output contract rather than a full multi-band browser schema
+- the active browser model is `v0.1-real-data`, trained on MUSAN + OpenMIC-2018 (65K clips)
+- some issue labels (`boxy`, `nasal`, `thin`) have low F1 due to sparse training data
+- guitar threshold is low (0.25) due to dataset imbalance — may produce more false positives
+- CI golden set has only 3 samples; thresholds are tuned to avoid over-prediction on this small set
+- browser runtime still uses a compatibility single-band EQ output contract rather than the full multi-band schema the Python model supports
 
 ### Data Limitations
 
@@ -564,22 +575,21 @@ python -m ml.train \
 
 ### Immediate
 
-- keep product copy aligned with the actual monitoring behavior
-- maintain model isolation until a real-data checkpoint exists
-- expand the golden dataset beyond the current starter set
+- monitor `v0.2-fsd50k-extended` training completion and evaluate against baseline
+- expand the golden dataset beyond the current 3-sample starter set
 - keep parity and leakage tests green
 
 ### Short Term
 
-- train on real-source audio using `ml/download_datasets.py` + `ml/train.py --audio-root`
+- promote `v0.2-fsd50k-extended` if it improves on sparse-label F1 (`boxy`, `nasal`, `thin`)
 - close the feedback loop: periodically run `ml/ingest_feedback.py` on exported browser feedback and merge into the training manifest
+- improve threshold calibration with a larger golden evaluation set
 - promote learned EQ outputs beyond the internal training path
 - expand CI coverage for input integrity and browser-facing regression checks
-- improve threshold calibration on real evaluation audio
 
 ### Longer Term
 
-- graduate from `v0.0-pipeline-check` to a true production model
+- graduate from single-band browser EQ contract to multi-band EQ output
 - decide whether browser-only inference remains sufficient
 - add a server inference path if larger models become necessary
 - add human review step into the feedback ingestion loop
@@ -600,7 +610,7 @@ The most important thing to preserve is the distinction between:
 - **pipeline works**
 - **model is trustworthy**
 
-Right now, the first statement is true. The second is not yet true.
+As of Apr 15, 2026, both statements are true for `v0.1-real-data`. The model was trained on real public audio, passed CI evaluation, and is the active default. It is not perfect — some labels are weak — but it is no longer synthetic-data-only. See `ml/model_history.md` for details.
 
 ## Related Docs
 

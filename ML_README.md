@@ -2,17 +2,12 @@
 
 This document covers the ML-specific part of LoLvlance:
 
-- current runtime model status
+- current runtime model status and training results
 - model and export architecture
 - degradation-based training path
 - evaluation and CI gating
 - input-integrity test coverage
-
-The most important framing is:
-
-- the **active browser checkpoint** is still `v0.0-pipeline-check`
-- the **Python ML codebase** now supports a more advanced learning-based path
-- the existence of that code does not change the current product honesty requirements
+- model history reference
 
 Korean version: `ML_README.ko.md`
 
@@ -29,8 +24,8 @@ Korean version: `ML_README.ko.md`
 
 - The browser runtime analyzes a rolling `3.0` second window.
 - Monitoring passes run on a `1.0` second stride in `src/app/hooks/useMonitoring.ts`.
-- The active runtime model is isolated as `v0.0-pipeline-check`.
-- The reserved production version tag is `v0.1-real-data`.
+- The active runtime model is `v0.1-real-data` — the first real-data checkpoint, trained on MUSAN + OpenMIC-2018.
+- A follow-up training run (`v0.2-fsd50k-extended`, adding FSD50K) is currently in progress.
 - Product positioning should remain continuous monitoring and live session analysis, not instant-response AI.
 
 <a id="model-architecture"></a>
@@ -117,6 +112,18 @@ Schema source-of-truth:
 
 <a id="training-pipeline"></a>
 ## 2. Training Pipeline
+
+### Training History
+
+See `ml/model_history.md` for the complete record of all trained models with full metrics, artifact paths, and dataset details.
+
+Summary:
+
+| Version | Status | Clips | Macro Issue F1 | Macro Source F1 |
+|---|---|---|---|---|
+| `v0.0-pipeline-check` | Archived | Synthetic | N/A | N/A |
+| `v0.1-real-data` | **Active** | 65,738 | 0.531 | 0.612 |
+| `v0.2-fsd50k-extended` | In training | ~85K est. | TBD | TBD |
 
 ### Current Training Direction
 
@@ -315,32 +322,35 @@ These tests are meant to make that failure mode visible.
 
 ### What Is Production-Like
 
-- browser ML loading path works
+- browser ML loading path works end to end
 - ONNX export path works
-- model isolation exists
+- `v0.1-real-data` is trained on real public audio and deployed as default
+- source detection is functional: guitar F1=0.82, drums AUROC=0.93, vocal AUROC=0.92
 - monitoring pipeline uses a rolling window with no intentional blind gap
 - golden evaluation and integrity tests exist
+- CI gate validates model regressions before merging
 - real dataset download pipeline exists (`ml/download_datasets.py`)
 - browser feedback collection and ingestion pipeline exists (`FeedbackWidget` → `ml/ingest_feedback.py`)
 
-### What Is Not Production-Ready
+### What Still Needs Improvement
 
-- the active browser checkpoint (still `v0.0-pipeline-check`)
-- synthetic-data bias in the current runtime artifact
-- source reliability on real audio
-- real-world benchmark coverage
+- some issue labels are weak: `boxy` F1=0.0, `nasal`/`thin`/`sibilant` AUROC near 0.56–0.60
+- CI golden set has only 3 samples — not a real production benchmark
+- `v0.2-fsd50k-extended` training in progress to improve sparse-label coverage
 - feedback ingestion is manual (export → script → retrain), not automated
+- browser EQ output is still single-band compatibility contract, not full multi-band
 
 ### Correct Interpretation
 
 Today the repo proves:
 
-- the pipeline can run
-- the system can be evaluated
-- regressions can be caught
+- the pipeline can run on real audio
+- source detection generalizes to real recordings
+- issue detection is meaningful on common labels (muddy, harsh, dull)
+- regressions can be caught via CI
 
-It does **not** prove:
+It does **not** yet prove:
 
-- production accuracy
-- production trustworthiness
-- production-ready EQ intelligence
+- production accuracy across all 9 issue labels
+- reliable prediction on `boxy`, `nasal`, `thin` (sparse training data)
+- production-ready EQ intelligence (single-band only in browser)

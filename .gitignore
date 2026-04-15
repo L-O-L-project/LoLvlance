@@ -71,3 +71,6 @@ ml/checkpoints/*.pt
 
 # ML — 합성 데이터 (재생성: python ml/generate_synthetic_public_datasets.py)
 ml/artifacts/synthetic_public_datasets/
+
+# ML — 학습 manifest (재빌드: train.py --rebuild-manifest)
+ml/artifacts/*.jsonl
