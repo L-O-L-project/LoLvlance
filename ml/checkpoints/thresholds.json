@@ -2,21 +2,21 @@
   "schema_version": "2.0.0",
   "issue_thresholds": {
     "muddy": 0.4,
-    "harsh": 0.35,
+    "harsh": 0.2,
     "buried": 0.2,
-    "boomy": 0.3,
+    "boomy": 0.25,
     "thin": 0.2,
     "boxy": 0.2,
     "nasal": 0.25,
     "sibilant": 0.3,
-    "dull": 0.35
+    "dull": 0.4
   },
   "source_thresholds": {
     "vocal": 0.8,
-    "guitar": 0.25,
+    "guitar": 0.35,
     "bass": 0.8,
     "drums": 0.75,
     "keys": 0.8
   },
-  "best_epoch": 26
+  "best_epoch": 17
 }
