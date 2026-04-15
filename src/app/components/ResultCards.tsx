@@ -38,7 +38,7 @@ export function ResultCards({ result, language, isLive = false, features }: Resu
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-br from-green-600/20 to-emerald-600/20 border border-green-500/30 rounded-2xl p-8 text-center"
+          className="bg-gradient-to-br from-green-600/20 to-emerald-600/20 border border-green-500/30 rounded-2xl p-6 md:p-8 text-center"
         >
           <div className="flex flex-col items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
@@ -206,7 +206,7 @@ function DetectedSourcesCard({
         {detectedSources.map((entry) => (
           <span
             key={entry.source}
-            className="px-3 py-1.5 bg-cyan-500/10 text-cyan-200 rounded-lg text-sm font-medium border border-cyan-500/20"
+            className="px-3 py-2 bg-cyan-500/10 text-cyan-200 rounded-lg text-sm font-medium border border-cyan-500/20"
             title={entry.labels.join(', ')}
           >
             {(t[entry.source as keyof typeof t] || entry.source)} {Math.round(entry.confidence * 100)}%
@@ -418,7 +418,7 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
           isPrimary
             ? 'bg-gradient-to-br from-purple-600/20 to-blue-600/20 border border-purple-500/30'
             : 'bg-gray-800/50 border border-gray-700/50'
-        } rounded-2xl p-6`}
+        } rounded-2xl p-4 md:p-6`}
       >
         <div className="flex items-start gap-3">
           <div
@@ -432,16 +432,16 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
             <div className="text-xs text-gray-400 mb-1">
               {isPrimary ? t.problemDetected : t.secondaryProblem}
             </div>
-            <motion.div 
+            <motion.div
               layout={isLive}
-              className={`${isPrimary ? 'text-2xl' : 'text-xl'} font-bold`}
+              className={`${isPrimary ? 'text-xl md:text-2xl' : 'text-lg md:text-xl'} font-bold`}
             >
               {t[problem.type as keyof typeof t] || problem.type}
             </motion.div>
-            
+
             {/* CONFIDENCE - minimal but visible with animation */}
             <div className="mt-2">
-              <motion.span 
+              <motion.span
                 layout={isLive}
                 key={`confidence-${confidencePercent}`}
                 initial={isLive ? { scale: 1.1, opacity: 0.7 } : false}
@@ -476,7 +476,7 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
                     initial={isLive ? { scale: 0.9, opacity: 0 } : false}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ delay: index * 0.05 }}
-                    className="px-3 py-1.5 bg-blue-500/10 text-blue-300 rounded-lg text-sm font-medium border border-blue-500/20"
+                    className="px-3 py-2 bg-blue-500/10 text-blue-300 rounded-lg text-sm font-medium border border-blue-500/20"
                   >
                     {t[source as keyof typeof t] || source}
                   </motion.span>
@@ -551,7 +551,7 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
                       stiffness: 300,
                       damping: 25
                     }}
-                    className="px-3 py-2 bg-purple-500/10 text-purple-200 rounded-lg font-mono text-sm border border-purple-500/20"
+                    className="px-3 py-2.5 bg-purple-500/10 text-purple-200 rounded-lg font-mono text-sm border border-purple-500/20 min-h-[40px] flex items-center"
                   >
                     <motion.span
                       key={action}
