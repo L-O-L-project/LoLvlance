@@ -34,7 +34,7 @@ def sigmoid_focal_loss(
     targets: torch.Tensor,
     *,
     mask: torch.Tensor | None = None,
-    alpha: float = 0.25,
+    alpha: float = 0.75,
     gamma: float = 2.0,
     class_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:

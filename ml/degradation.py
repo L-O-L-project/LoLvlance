@@ -92,6 +92,9 @@ class DegradationConfig:
     compression_probability: float = 0.40
     filter_error_probability: float = 0.30
     seed: int = 7
+    # Fraction of samples returned as-is (no degradation, all-zero issue targets).
+    # Ensures the model sees negative examples and does not collapse to "always positive".
+    clean_ratio: float = 0.25
 
 
 def build_real_source_manifest(
@@ -178,9 +181,29 @@ class RealAudioDegradationDataset(Dataset[dict[str, torch.Tensor]]):
         )
         target_length = int(round(self.preprocessing_config.sample_rate * self.preprocessing_config.clip_seconds))
         clean_waveform = pad_or_trim(clean_waveform, target_length)
+        source_values = entry.get("source_targets", {}).get("values", [0.0 for _ in SOURCE_LABELS])
+        source_mask = entry.get("source_targets", {}).get("mask", [0.0 for _ in SOURCE_LABELS])
+
+        # Clean sample: no degradation applied, all issue targets are 0.
+        is_clean = float(rng.random()) < self.degradation_config.clean_ratio
+        if is_clean:
+            clean_features = extract_audio_features_from_waveform(clean_waveform, self.preprocessing_config)
+            eq_bands = self.degradation_config.eq_band_count
+            return {
+                "log_mel_spectrogram": torch.from_numpy(clean_features.log_mel_spectrogram).float(),
+                "clean_log_mel_spectrogram": torch.from_numpy(clean_features.log_mel_spectrogram).float(),
+                "issue_targets": torch.zeros(len(ISSUE_LABELS), dtype=torch.float32),
+                "issue_target_mask": torch.ones(len(ISSUE_LABELS), dtype=torch.float32),
+                "source_targets": torch.tensor(source_values, dtype=torch.float32),
+                "source_target_mask": torch.tensor(source_mask, dtype=torch.float32),
+                "eq_params": torch.zeros(eq_bands, dtype=torch.float32),
+                "eq_params_normalized": torch.zeros(eq_bands, dtype=torch.float32),
+                "eq_mask": torch.zeros(eq_bands, dtype=torch.float32),
+            }
+
         recipe = sample_degradation_recipe(
             rng=rng,
-            source_targets=entry.get("source_targets", {}).get("values", [0.0 for _ in SOURCE_LABELS]),
+            source_targets=source_values,
             config=self.degradation_config,
             sample_rate=self.preprocessing_config.sample_rate,
             issue_sampling_weights=self.issue_sampling_weights,
@@ -197,8 +220,6 @@ class RealAudioDegradationDataset(Dataset[dict[str, torch.Tensor]]):
             max_gain_db=self.degradation_config.max_eq_gain_db,
         )
         issue_targets = [1.0 if label in recipe.issue_labels else 0.0 for label in ISSUE_LABELS]
-        source_values = entry.get("source_targets", {}).get("values", [0.0 for _ in SOURCE_LABELS])
-        source_mask = entry.get("source_targets", {}).get("mask", [0.0 for _ in SOURCE_LABELS])
 
         return {
             "log_mel_spectrogram": torch.from_numpy(degraded_features.log_mel_spectrogram).float(),

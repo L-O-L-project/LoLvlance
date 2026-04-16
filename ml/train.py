@@ -88,6 +88,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--distillation-weight", type=float, default=0.35, help="Student distillation loss weight.")
     parser.add_argument("--distillation-temperature", type=float, default=2.0, help="KL temperature.")
     parser.add_argument("--num-workers", type=int, default=0, help="Dataloader workers.")
+    parser.add_argument("--clean-ratio", type=float, default=0.25, help="Fraction of training samples with no degradation applied (teaches the model to predict 'no issue').")
+    parser.add_argument("--grad-clip", type=float, default=1.0, help="Max gradient norm for clipping (0 = disabled).")
     parser.add_argument("--seed", type=int, default=7, help="Random seed.")
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("ml/checkpoints"), help="Directory for checkpoints.")
     parser.add_argument("--device", type=str, default="auto", help="auto, cpu, cuda, or mps.")
@@ -109,6 +111,7 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         clip_seconds=preprocessing_config.clip_seconds,
         eq_band_count=int(getattr(args, "eq_bands", 5)),
         seed=int(getattr(args, "seed", 7)),
+        clean_ratio=float(getattr(args, "clean_ratio", 0.25)),
     )
     train_dataset = RealAudioDegradationDataset(
         manifest_path=manifest_path,
@@ -136,6 +139,16 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
     )
     model = AudioIntelligenceNet(model_config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(getattr(args, "learning_rate", 3e-4)), weight_decay=float(getattr(args, "weight_decay", 1e-4)))
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=float(getattr(args, "learning_rate", 3e-4)),
+        epochs=int(getattr(args, "epochs", 6)),
+        steps_per_epoch=max(1, len(train_loader)),
+        pct_start=0.1,
+        anneal_strategy="cos",
+        div_factor=10.0,
+        final_div_factor=100.0,
+    )
     source_pos_weight = compute_source_pos_weight(manifest_entries).to(device)
     issue_class_weights = estimate_issue_class_weights(train_dataset.issue_sampling_weights, len(train_dataset)).to(device)
 
@@ -158,18 +171,27 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
     best_checkpoint_path = checkpoint_dir / "best_sound_issue_model.pt"
 
     total_epochs = int(getattr(args, "epochs", 6))
+    grad_clip = float(getattr(args, "grad_clip", 1.0))
     _train_start = datetime.datetime.now()
-    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] training started — {total_epochs} epochs | train={len(train_dataset)} val={len(val_dataset)} | device={device}", flush=True)
+    print(
+        f"[{datetime.datetime.now().strftime('%H:%M:%S')}] training started — {total_epochs} epochs | "
+        f"train={len(train_dataset)} val={len(val_dataset)} | device={device} | "
+        f"clean_ratio={degradation_config.clean_ratio:.0%} grad_clip={grad_clip}",
+        flush=True,
+    )
 
     for epoch in range(1, total_epochs + 1):
         _epoch_start = datetime.datetime.now()
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] epoch {epoch}/{total_epochs} started", flush=True)
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] epoch {epoch}/{total_epochs} started | lr={current_lr:.2e}", flush=True)
         train_epoch = run_epoch(
             model=model,
             teacher_model=teacher_model,
             data_loader=train_loader,
             device=device,
             optimizer=optimizer,
+            scheduler=scheduler,
+            grad_clip=grad_clip,
             issue_class_weights=issue_class_weights,
             source_pos_weight=source_pos_weight,
             issue_loss_weight=float(getattr(args, "issue_loss_weight", 1.0)),
@@ -186,6 +208,8 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
             data_loader=val_loader,
             device=device,
             optimizer=None,
+            scheduler=None,
+            grad_clip=0.0,
             issue_class_weights=issue_class_weights,
             source_pos_weight=source_pos_weight,
             issue_loss_weight=float(getattr(args, "issue_loss_weight", 1.0)),
@@ -263,6 +287,8 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         data_loader=val_loader,
         device=device,
         optimizer=None,
+        scheduler=None,
+        grad_clip=0.0,
         issue_class_weights=issue_class_weights,
         source_pos_weight=source_pos_weight,
         issue_loss_weight=float(getattr(args, "issue_loss_weight", 1.0)),
@@ -394,6 +420,8 @@ def run_epoch(
     data_loader: DataLoader,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+    grad_clip: float,
     issue_class_weights: torch.Tensor,
     source_pos_weight: torch.Tensor,
     issue_loss_weight: float,
@@ -465,7 +493,11 @@ def run_epoch(
 
             if is_training:
                 losses.total.backward()
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
 
         total_loss += float(losses.total.item())
         total_issue_loss += float(losses.issue_loss.item())
