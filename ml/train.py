@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import json
 import random
 from pathlib import Path
@@ -156,7 +157,13 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
     best_state_dict = copy.deepcopy(model.state_dict())
     best_checkpoint_path = checkpoint_dir / "best_sound_issue_model.pt"
 
-    for epoch in range(1, int(getattr(args, "epochs", 6)) + 1):
+    total_epochs = int(getattr(args, "epochs", 6))
+    _train_start = datetime.datetime.now()
+    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] training started — {total_epochs} epochs | train={len(train_dataset)} val={len(val_dataset)} | device={device}", flush=True)
+
+    for epoch in range(1, total_epochs + 1):
+        _epoch_start = datetime.datetime.now()
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] epoch {epoch}/{total_epochs} started", flush=True)
         train_epoch = run_epoch(
             model=model,
             teacher_model=teacher_model,
@@ -216,6 +223,19 @@ def run_training(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
             "selection_score": round(composite_score, 4),
         }
         history.append(epoch_record)
+
+        _epoch_elapsed = (datetime.datetime.now() - _epoch_start).total_seconds()
+        _elapsed_total = (datetime.datetime.now() - _train_start).total_seconds()
+        _eta_seconds = (_elapsed_total / epoch) * (total_epochs - epoch)
+        print(
+            f"[{datetime.datetime.now().strftime('%H:%M:%S')}] epoch {epoch}/{total_epochs} done "
+            f"({_epoch_elapsed/60:.1f}m) | "
+            f"train_loss={train_epoch['total_loss']:.4f} val_loss={val_epoch['total_loss']:.4f} | "
+            f"issue_f1={val_metrics['issue_head']['macro_f1']:.3f} source_f1={val_metrics['source_head']['macro_f1']:.3f} | "
+            f"score={composite_score:.4f} {'★best' if composite_score > best_score else ''} | "
+            f"ETA={datetime.timedelta(seconds=int(_eta_seconds))}",
+            flush=True,
+        )
 
         save_checkpoint(
             checkpoint_path=checkpoint_dir / "last_sound_issue_model.pt",
