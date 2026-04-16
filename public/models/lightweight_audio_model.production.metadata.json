@@ -58,20 +58,20 @@
   "thresholds": {
     "issue_thresholds": {
       "muddy": 0.4,
-      "harsh": 0.2,
+      "harsh": 0.35,
       "buried": 0.2,
       "boomy": 0.25,
-      "thin": 0.2,
+      "thin": 0.3,
       "boxy": 0.2,
-      "nasal": 0.25,
-      "sibilant": 0.3,
+      "nasal": 0.2,
+      "sibilant": 0.2,
       "dull": 0.4
     },
     "source_thresholds": {
       "vocal": 0.8,
       "guitar": 0.35,
       "bass": 0.8,
-      "drums": 0.75,
+      "drums": 0.8,
       "keys": 0.8
     },
     "derived_thresholds": {
