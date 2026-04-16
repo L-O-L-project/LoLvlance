@@ -238,26 +238,22 @@ def resample_audio(waveform: np.ndarray, source_rate: int, target_rate: int) -> 
 
     if source_rate < target_rate:
         # Upsampling — linear interpolation (matches JS branch)
-        output = np.empty(output_length, dtype=np.float32)
-        for index in range(output_length):
-            position = index * ratio
-            base = int(position)
-            nxt = min(base + 1, waveform.shape[0] - 1)
-            frac = position - base
-            output[index] = waveform[base] + (waveform[nxt] - waveform[base]) * frac
-        return output
+        indices = np.arange(output_length, dtype=np.float64) * ratio
+        base = indices.astype(np.int64)
+        nxt = np.minimum(base + 1, waveform.shape[0] - 1)
+        frac = (indices - base).astype(np.float32)
+        return (waveform[base] + (waveform[nxt] - waveform[base]) * frac).astype(np.float32)
 
     # Downsampling — block average (matches JS branch)
-    output = np.empty(output_length, dtype=np.float32)
-    input_offset = 0
-    for index in range(output_length):
-        next_offset = min(waveform.shape[0], int(round((index + 1) * ratio)))
-        segment = waveform[input_offset:next_offset]
-        output[index] = float(segment.mean()) if segment.size else float(
-            waveform[min(input_offset, waveform.shape[0] - 1)]
-        )
-        input_offset = next_offset
-    return output
+    cumsum = np.concatenate([[0.0], np.cumsum(waveform, dtype=np.float64)])
+    boundaries = np.minimum(
+        waveform.shape[0],
+        np.round(np.arange(output_length + 1, dtype=np.float64) * ratio),
+    ).astype(np.int64)
+    sums = cumsum[boundaries[1:]] - cumsum[boundaries[:-1]]
+    counts = np.diff(boundaries).astype(np.float64)
+    counts[counts == 0] = 1.0
+    return (sums / counts).astype(np.float32)
 
 
 def next_power_of_two(value: int) -> int:
