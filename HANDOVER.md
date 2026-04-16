@@ -6,11 +6,12 @@ It is written to help the next engineer understand what is actually implemented,
 
 The short version is:
 
-- the browser monitoring path is working end to end
+- the browser monitoring path is working end to end, with a mobile-first full-screen UI
 - the active browser model is `v0.1-real-data` — the first real-data trained checkpoint, trained on MUSAN + OpenMIC-2018 (65K clips)
+- three follow-up training runs (v0.2, v0.3, v0.4) uncovered and fixed two major pipeline bugs: a Python/JS resampler mismatch and a training dataset design flaw
 - the runtime uses rolling-window monitoring with no intentional blind gap
 - golden evaluation and input-integrity test infrastructure exist and are CI-gated
-- the pipeline is trustworthy; the model is functional on real audio but not perfect on all labels
+- v0.4 training is currently in progress with all known bugs fixed; expected to be the first promotable successor to v0.1
 
 Korean version: `HANDOVER.ko.md`
 
@@ -147,6 +148,27 @@ The Python ML stack has moved beyond the original prototype and now supports:
 - self-supervised degradation-based training in `ml/degradation.py`
 - distillation-ready losses in `ml/losses.py`
 
+### Training Pipeline Bugs Fixed (Apr 16–17, 2026)
+
+Two deep bugs were discovered and fixed during v0.2–v0.4:
+
+**Bug 1 — Resampler mismatch** (`ml/preprocessing.py`):
+- `resample_audio` used linear interpolation for downsampling
+- Browser (`audioUtils.ts → resampleMonoBuffer`) uses block averaging for downsampling
+- Result: train/inference feature divergence; all 10 parity tests failed with MSE 0.50–2.34
+- Fix: rewrote downsampling path with vectorized numpy cumsum block averaging; upsampling uses vectorized `np.interp`
+
+**Bug 2 — Always-positive predictions** (`ml/degradation.py`):
+- `RealAudioDegradationDataset` applied degradation to 100% of training samples
+- Model never saw a clean example → learned "always predict positive" as the optimal strategy
+- Fix: `clean_ratio=0.25` parameter — 25% of samples are returned unmodified with all-zero issue targets
+
+**Additional training improvements**:
+- Focal loss `alpha` corrected from `0.25` to `0.75` (was downweighting positive class, opposite of intent)
+- `OneCycleLR` scheduler added (warmup 10% + cosine decay); prevents issue F1 collapse seen in v0.3
+- Gradient clipping (`max_norm=1.0`) added
+- Epoch-level logging added to `ml/train.py` (was silent until completion)
+
 ### Important Operational Distinction
 
 The codebase can support a more advanced learning-based model, but the active user-facing checkpoint does not yet justify production claims.
@@ -176,8 +198,10 @@ Three model generations have been trained. See `ml/model_history.md` for full de
 | Version | Status | Data | Notes |
 |---|---|---|---|
 | `v0.0-pipeline-check` | Archived | Synthetic | Pipeline validation only |
-| `v0.1-real-data` | **Active** | MUSAN + OpenMIC (65K) | Current default |
-| `v0.2-fsd50k-extended` | In training | + FSD50K partial | ETA: TBD |
+| `v0.1-real-data` | **Active (browser default)** | MUSAN + OpenMIC (65K) | Passed CI gate |
+| `v0.2-fsd50k-extended` | Not promoted | + FSD50K (85K) | Resampler bug + always-positive |
+| `v0.3-resampler-fix` | Not promoted | Same as v0.2 | Resampler fixed; training dataset bug |
+| `v0.4-clean-ratio` | **In training** | Same as v0.2 | All root causes fixed; 40 epochs |
 
 ### Runtime Controls
 
@@ -536,13 +560,14 @@ python -m ml.train \
 
 ### Immediate
 
-- monitor `v0.2-fsd50k-extended` training (PID 58050, log: `ml/train_fsd50k.log`) and evaluate on completion
-- expand the golden evaluation set beyond 3 samples
-- keep input-integrity tests part of the release process
+- monitor `v0.4-clean-ratio` training (PID 51567, log: `ml/train_v04.log`, 40 epochs)
+- when complete: run `ml/eval/evaluate.py` with new ONNX and confirm CI gate passes
+- if gate passes: run `--write-baseline` to lock new baseline, then promote to browser
 
 ### Short Term
 
-- evaluate `v0.2-fsd50k-extended` against baseline; promote if `boxy`/`nasal`/`thin` improve
+- evaluate v0.4 against golden set; promote if issue macro F1 ≥ 0.40 and gate passes
+- expand the golden evaluation set beyond 3 samples — CI gate with only 3 samples is not a real benchmark
 - run feedback ingestion cycle: export browser feedback → `ml/ingest_feedback.py` → merge manifest → retrain
 - improve threshold calibration with a larger golden evaluation set
 - promote learned EQ outputs further into runtime-facing contracts
@@ -583,4 +608,4 @@ There is a difference between:
 - **the pipeline works**
 - **the model is trustworthy**
 
-As of Apr 15, 2026, both statements are true for `v0.1-real-data`. The model was trained on real public audio, passed CI evaluation, and is the active default. It is not perfect on all labels — `boxy`, `nasal`, and `thin` need more training data — but it is no longer synthetic-data-only.
+As of Apr 17, 2026, `v0.1-real-data` is still the active browser default. The model is functional and passed CI evaluation, but three follow-up runs (v0.2, v0.3, v0.4) revealed that the training pipeline had two serious bugs that prevented the model from learning to discriminate issues correctly. Both bugs are now fixed in v0.4. Until v0.4 is evaluated and promoted, `v0.1-real-data` remains the production checkpoint.

@@ -53,7 +53,7 @@ The intended user is not a full-time mix engineer. The product is aimed at peopl
 
 ### What the Product Does Today
 
-- captures microphone audio in the browser
+- captures microphone audio in the browser (mobile-first, full-screen layout)
 - maintains a rolling analysis buffer
 - extracts audio features locally
 - runs an ONNX model locally when enabled
@@ -133,19 +133,19 @@ This model:
 - has been validated against the CI golden evaluation gate
 - source detection is functional: guitar F1=0.82, drums AUROC=0.93, vocal AUROC=0.92
 
-See `ml/model_history.md` for full per-label metrics, artifact paths, and known limitations.
+A significant training pipeline overhaul is underway (v0.4). See `ml/model_history.md` for the full sequence of what was discovered and fixed.
 
 ### Model History
 
-Three model generations have been trained:
-
-| Version | Status | Data | Best Metric |
+| Version | Status | Data | Notes |
 |---|---|---|---|
 | `v0.0-pipeline-check` | Archived | Synthetic | Pipeline validation only |
-| `v0.1-real-data` | **Active** | MUSAN + OpenMIC (65K clips) | Guitar F1=0.82, macro issue F1=0.53 |
-| `v0.2-fsd50k-extended` | In training | + FSD50K partial (85K clips) | TBD |
+| `v0.1-real-data` | **Active (browser default)** | MUSAN + OpenMIC (65K) | Guitar F1=0.82, issue macro F1=0.53 |
+| `v0.2-fsd50k-extended` | Not promoted | + FSD50K (85K) | Resampler bug + always-positive predictions |
+| `v0.3-resampler-fix` | Not promoted | Same as v0.2 | Resampler fixed; still always-positive (dataset bug) |
+| `v0.4-clean-ratio` | **In training** | Same as v0.2 | All root causes fixed; 40 epochs |
 
-Full history: `ml/model_history.md`
+Full history and per-label metrics: `ml/model_history.md`
 
 ### Kill Switch and Routing
 
@@ -575,13 +575,14 @@ python -m ml.train \
 
 ### Immediate
 
-- monitor `v0.2-fsd50k-extended` training completion and evaluate against baseline
+- monitor `v0.4-clean-ratio` training completion (PID 51567, log: `ml/train_v04.log`)
+- run eval after v0.4 completes and promote if CI gate passes
+- update `ml/eval/baseline.json` on first gate-passing model
 - expand the golden dataset beyond the current 3-sample starter set
-- keep parity and leakage tests green
 
 ### Short Term
 
-- promote `v0.2-fsd50k-extended` if it improves on sparse-label F1 (`boxy`, `nasal`, `thin`)
+- promote `v0.4-clean-ratio` if issue F1 reaches ≥0.40 macro and gate passes
 - close the feedback loop: periodically run `ml/ingest_feedback.py` on exported browser feedback and merge into the training manifest
 - improve threshold calibration with a larger golden evaluation set
 - promote learned EQ outputs beyond the internal training path
@@ -610,7 +611,7 @@ The most important thing to preserve is the distinction between:
 - **pipeline works**
 - **model is trustworthy**
 
-As of Apr 15, 2026, both statements are true for `v0.1-real-data`. The model was trained on real public audio, passed CI evaluation, and is the active default. It is not perfect — some labels are weak — but it is no longer synthetic-data-only. See `ml/model_history.md` for details.
+As of Apr 17, 2026, `v0.1-real-data` remains the active browser default. Three subsequent training runs (v0.2–v0.4) uncovered and fixed two deep pipeline bugs: a Python/JS resampler mismatch and a training dataset design flaw that caused the model to always predict "something is wrong." The v0.4 run is the first to have all root causes corrected. See `ml/model_history.md` for the full discovery sequence.
 
 ## Related Docs
 

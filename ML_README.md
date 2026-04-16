@@ -25,7 +25,8 @@ Korean version: `ML_README.ko.md`
 - The browser runtime analyzes a rolling `3.0` second window.
 - Monitoring passes run on a `1.0` second stride in `src/app/hooks/useMonitoring.ts`.
 - The active runtime model is `v0.1-real-data` — the first real-data checkpoint, trained on MUSAN + OpenMIC-2018.
-- A follow-up training run (`v0.2-fsd50k-extended`, adding FSD50K) is currently in progress.
+- v0.2 and v0.3 uncovered two training pipeline bugs (resampler mismatch + always-positive collapse) and were not promoted.
+- v0.4 (`v0.4-clean-ratio`) is currently training with all root causes fixed; 40 epochs, PID 51567, log: `ml/train_v04.log`.
 - Product positioning should remain continuous monitoring and live session analysis, not instant-response AI.
 
 <a id="model-architecture"></a>
@@ -119,11 +120,35 @@ See `ml/model_history.md` for the complete record of all trained models with ful
 
 Summary:
 
-| Version | Status | Clips | Macro Issue F1 | Macro Source F1 |
-|---|---|---|---|---|
-| `v0.0-pipeline-check` | Archived | Synthetic | N/A | N/A |
-| `v0.1-real-data` | **Active** | 65,738 | 0.531 | 0.612 |
-| `v0.2-fsd50k-extended` | In training | ~85K est. | TBD | TBD |
+| Version | Status | Clips | Macro Issue F1 | Macro Source F1 | Notes |
+|---|---|---|---|---|---|
+| `v0.0-pipeline-check` | Archived | Synthetic | N/A | N/A | Pipeline validation |
+| `v0.1-real-data` | **Active** | 65,738 | 0.531 | 0.612 | CI gate passed |
+| `v0.2-fsd50k-extended` | Not promoted | ~85K | — | — | Resampler bug + always-positive |
+| `v0.3-resampler-fix` | Not promoted | ~85K | 0.156 | 0.511 | Resampler fixed; dataset bug |
+| `v0.4-clean-ratio` | **In training** | ~85K | TBD | TBD | All root causes fixed |
+
+### Pipeline Bugs Discovered and Fixed (Apr 16–17, 2026)
+
+#### Bug 1: Resampler Mismatch
+
+- **Where**: `ml/preprocessing.py → resample_audio`
+- **What**: Python used linear interpolation for downsampling. The browser (`audioUtils.ts → resampleMonoBuffer`) uses block averaging for downsampling.
+- **Impact**: Feature divergence between training and inference. All 10 parity tests failed (MSE 0.50–2.34 vs. threshold 0.0001).
+- **Fix**: Vectorized cumsum block averaging for downsampling; vectorized `np.interp` for upsampling. 23/23 tests pass.
+
+#### Bug 2: Always-Positive Collapse
+
+- **Where**: `ml/degradation.py → RealAudioDegradationDataset`
+- **What**: Every training sample had degradation applied. The model never saw a clean input and learned "always predict positive" as the loss-minimizing strategy.
+- **Impact**: CI eval shows predicted-positive ratio ≈ 1.0 for 7/9 issue labels on all golden samples.
+- **Fix**: `clean_ratio=0.25` field in `DegradationConfig`. 25% of samples are returned unmodified with all-zero issue targets. Focal loss `alpha` also corrected from `0.25` (which downweighted positives) to `0.75`.
+
+#### Additional Training Improvements
+
+- `OneCycleLR` scheduler: prevents the issue F1 collapse seen in v0.3 (0.525 → 0.005 from epoch 1 to 2)
+- Gradient clipping (`max_norm=1.0`): prevents early training instability
+- Epoch-level logging: `ml/train.py` now prints per-epoch progress during training (was silent until completion)
 
 ### Current Training Direction
 
@@ -213,7 +238,7 @@ The generated recipe stores:
 
 Current loss modules in `ml/losses.py`:
 
-- focal loss for issue prediction
+- focal loss for issue prediction (`alpha=0.75`, `gamma=2.0` — positive-upweighted)
 - BCE or softmax source loss depending on head mode
 - Smooth L1 loss for EQ regression
 - KL-based distillation loss for student training
@@ -334,9 +359,8 @@ These tests are meant to make that failure mode visible.
 
 ### What Still Needs Improvement
 
-- some issue labels are weak: `boxy` F1=0.0, `nasal`/`thin`/`sibilant` AUROC near 0.56–0.60
-- CI golden set has only 3 samples — not a real production benchmark
-- `v0.2-fsd50k-extended` training in progress to improve sparse-label coverage
+- `v0.4-clean-ratio` is in training — until it completes and passes CI, `v0.1-real-data` remains the only promoted model
+- CI golden set has only 3 samples — not a real production benchmark; must be expanded
 - feedback ingestion is manual (export → script → retrain), not automated
 - browser EQ output is still single-band compatibility contract, not full multi-band
 
@@ -344,13 +368,32 @@ These tests are meant to make that failure mode visible.
 
 Today the repo proves:
 
-- the pipeline can run on real audio
-- source detection generalizes to real recordings
-- issue detection is meaningful on common labels (muddy, harsh, dull)
+- the pipeline can run on real audio end to end
+- source detection generalizes to real recordings (v0.1)
+- issue detection is meaningful on common labels when the training dataset is balanced (v0.4 target)
 - regressions can be caught via CI
 
 It does **not** yet prove:
 
-- production accuracy across all 9 issue labels
-- reliable prediction on `boxy`, `nasal`, `thin` (sparse training data)
+- production accuracy across all 9 issue labels (v0.4 is the first attempt with a correctly designed training set)
+- reliable prediction on `boxy`, `nasal`, `thin` (sparse training data, hard to fix without more labeled audio)
 - production-ready EQ intelligence (single-band only in browser)
+
+### v0.4 Training Parameters (current run)
+
+```bash
+.venv-ml/bin/python -m ml.train \
+  --musan-root data/datasets/musan/musan \
+  --openmic-root data/datasets/openmic/openmic-2018 \
+  --fsd50k-root data/datasets/fsd50k/FSD50K.dev_audio \
+  --manifest-path ml/artifacts/manifest_musan_openmic_fsd50k.jsonl \
+  --clips-per-file 2 \
+  --epochs 40 \
+  --batch-size 32 \
+  --learning-rate 3e-4 \
+  --clean-ratio 0.25 \
+  --grad-clip 1.0 \
+  --num-workers 0 \
+  --export-onnx \
+  --onnx-output public/models/lightweight_audio_model.production.onnx
+```

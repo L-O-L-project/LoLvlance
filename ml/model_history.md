@@ -125,20 +125,19 @@ Active default since Apr 15, 2026. Routed via `MODEL_VERSION === "v0.1-real-data
 
 ---
 
-## v0.2-fsd50k-extended (in progress)
+## v0.2-fsd50k-extended (not promoted — CI gate failure)
 
 | Field | Value |
 |---|---|
-| Version tag | `v0.2-fsd50k-extended` (tentative) |
-| Status | Training in progress (started Apr 15, 2026 ~10:10 AM) |
+| Version tag | `v0.2-fsd50k-extended` |
+| Status | Completed — not promoted |
+| Trained | Apr 15–16, 2026 |
 | Device | Apple Silicon MPS |
 | Data | MUSAN + OpenMIC-2018 + FSD50K (partial) |
-| Epochs | 20 planned |
-| Clips | ~85K estimated (65,738 + ~19,544 FSD50K) |
+| Epochs | 20 |
+| Clips | ~85K (65,738 + ~19,544 FSD50K) |
 | Batch size | 32 |
 | Learning rate | 2e-4 |
-| Clips per file | 2 |
-| PID | 58050 |
 
 ### Datasets
 
@@ -148,26 +147,104 @@ Same as v0.1 plus:
 |---|---|---|
 | FSD50K.dev_audio | ~19,544 valid files | First volume only (~47% of full dataset) |
 
-FSD50K extraction note: The full FSD50K dataset uses a multi-disk ZIP format (z01+z02+zip) that macOS tools cannot extract. Only the first volume was extracted successfully (19,544 valid WAV files). The remaining ~47% of the dataset was not available. Zero-byte files from failed extraction attempts were removed before training.
+FSD50K extraction note: The full FSD50K dataset uses a multi-disk ZIP format (z01+z02+zip) that macOS tools cannot extract. Only the first volume was extracted successfully (19,544 valid WAV files). Zero-byte files from failed extraction attempts were removed before training.
+
+### Why Not Promoted
+
+Two bugs discovered during eval:
+
+1. **Resampler mismatch**: `ml/preprocessing.py` used linear interpolation for downsampling. The browser (`audioUtils.ts`) uses block averaging. This caused train/inference feature divergence (MSE 0.50–2.34 vs. threshold 0.0001). All 10 parity tests were failing.
+2. **Always-positive predictions**: Even after the resampler was fixed, the model predicted positive for all 7+ issue labels on all golden samples. Root cause: `RealAudioDegradationDataset` applied degradation to 100% of training samples, so the model never saw a clean example and learned "always predict positive" as the loss-minimizing strategy.
+
+### Artifacts
+
+| File | Description |
+|---|---|
+| `ml/artifacts/manifest_musan_openmic_fsd50k.jsonl` | Training manifest (still used by v0.3/v0.4) |
+| `ml/train_fsd50k.log` | Training log |
+
+---
+
+## v0.3-resampler-fix (not promoted — always-positive predictions)
+
+| Field | Value |
+|---|---|
+| Version tag | `v0.3-resampler-fix` |
+| Status | Completed — not promoted |
+| Trained | Apr 16–17, 2026 |
+| Device | CPU |
+| Data | MUSAN + OpenMIC-2018 + FSD50K (same manifest as v0.2) |
+| Epochs | 20 (best at epoch 18) |
+| Clips | ~85K |
+| Batch size | 32 |
+| Learning rate | 2e-4 (flat, no scheduler) |
+| Best score | 0.310 (issue macro F1=0.156, source macro F1=0.511) |
+
+### What Changed vs v0.2
+
+- Resampler fixed: `resample_audio` now uses vectorized cumsum block averaging for downsampling, matching `resampleMonoBuffer` in `audioUtils.ts` exactly. All 23 tests pass.
+- `--num-workers` set to 0 to avoid macOS multiprocessing (spawn) overhead.
+- Downsampling loop vectorized with numpy cumsum for ~100× speedup.
+
+### Why Not Promoted
+
+CI gate still failed: predicted positive for 7/9 issue labels across all 3 golden samples. Root cause was not fixed — 100% of training samples still had degradation applied. The model learned to always predict "something is wrong."
+
+Additional issues identified:
+- Focal loss `alpha=0.25` was actually downweighting positive-class loss, making the "always positive" collapse worse.
+- No LR scheduler — flat learning rate led to unstable training (issue F1 collapsed from 0.52 in epoch 1 to 0.005 in epoch 2).
+- No gradient clipping.
+
+### Artifacts
+
+| File | Description |
+|---|---|
+| `ml/checkpoints/best_sound_issue_model.pt` | Best checkpoint (epoch 18, Apr 16 23:37) |
+| `ml/train_v03.log` | Training log |
+
+---
+
+## v0.4-clean-ratio (in training)
+
+| Field | Value |
+|---|---|
+| Version tag | `v0.4-clean-ratio` (tentative) |
+| Status | **Training in progress** (started Apr 17, 2026) |
+| Device | CPU |
+| Data | MUSAN + OpenMIC-2018 + FSD50K (same manifest as v0.2–v0.3) |
+| Epochs | 40 |
+| Clips | ~85K |
+| Batch size | 32 |
+| Learning rate | 3e-4 (OneCycleLR, warmup 10% + cosine decay) |
+| PID | 51567 |
+
+### What Changed vs v0.3
+
+Three root-cause fixes applied simultaneously:
+
+| Fix | Change | Reason |
+|---|---|---|
+| Clean ratio | 25% of training samples returned with no degradation applied (all-zero issue targets) | Model never saw negative examples before; now learns "no issue" |
+| Focal loss alpha | `0.25` → `0.75` | Original alpha downweighted positive class; flipped to correctly upweight positives |
+| LR scheduler | `OneCycleLR` (warmup 10% + cosine decay) | Flat LR caused training instability and issue F1 collapse after epoch 1 |
+| Gradient clipping | `max_norm=1.0` added | Prevents exploding gradients during early training |
+| Epochs | 20 → 40 | More training time to converge with the new clean-sample distribution |
+| Epoch logging | Added per-epoch print with loss, F1, LR, ETA | Previously only printed at end of training |
+
+### Expected Improvements over v0.3
+
+- Model learns to predict "no issue" when audio is clean
+- Stable F1 across all epochs (no collapse)
+- Better-calibrated thresholds from the tuning step at end of training
+- CI gate expected to pass: predicted-positive ratios should fall within expected prevalence bands
 
 ### Artifacts (when complete)
 
 | File | Description |
 |---|---|
 | `ml/checkpoints/best_sound_issue_model.pt` | Will be overwritten on completion |
-| `ml/artifacts/manifest_musan_openmic_fsd50k.jsonl` | Training manifest |
-| `public/models/lightweight_audio_model.production.onnx` | Will replace v0.1 artifact on export |
-| `ml/train_fsd50k.log` | Training log (buffered — may be empty during manifest build) |
-
-### Expected Improvements over v0.1
-
-- More diverse audio content from FSD50K (environmental + music sounds)
-- Potentially better generalization on non-music inputs
-- More training data for `bass`, `vocals`, `keys` which had limited support in v0.1
-
-### Status
-
-Training in progress. Will update this entry on completion with final metrics.
+| `public/models/lightweight_audio_model.production.onnx` | Will replace v0.1 artifact on promotion |
+| `ml/train_v04.log` | Training log (epoch-level progress visible) |
 
 ---
 
