@@ -196,9 +196,9 @@ class RealAudioDegradationDataset(Dataset[dict[str, torch.Tensor]]):
                 "issue_target_mask": torch.ones(len(ISSUE_LABELS), dtype=torch.float32),
                 "source_targets": torch.tensor(source_values, dtype=torch.float32),
                 "source_target_mask": torch.tensor(source_mask, dtype=torch.float32),
-                "eq_params": torch.zeros(eq_bands, dtype=torch.float32),
-                "eq_params_normalized": torch.zeros(eq_bands, dtype=torch.float32),
-                "eq_mask": torch.zeros(eq_bands, dtype=torch.float32),
+                "eq_params": torch.zeros((eq_bands, 2), dtype=torch.float32),
+                "eq_params_normalized": torch.zeros((eq_bands, 2), dtype=torch.float32),
+                "eq_mask": torch.zeros((eq_bands, 2), dtype=torch.float32),
             }
 
         recipe = sample_degradation_recipe(
