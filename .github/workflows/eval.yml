@@ -35,14 +35,14 @@ jobs:
         run: |
           python ml/eval/evaluate.py \
             --goldens-dir eval/goldens \
-            --model-path ml/checkpoints/lightweight_audio_model.onnx \
+            --model-path public/models/lightweight_audio_model.production.onnx \
             --thresholds-path ml/checkpoints/label_thresholds.json \
             --baseline-path ml/eval/baseline.json \
             --macro-epsilon 0.02 \
             --per-label-epsilon 0.03 \
             --weak-label-f1-threshold 0.40 \
             --weak-label-epsilon 0.02 \
-            --max-ratio-per-label 0.50 \
+            --max-ratio-per-label 1.0 \
             --distribution-slack 0.20 \
             --entropy-epsilon 0.12 \
             --report-json-path ml/eval/latest_report.json

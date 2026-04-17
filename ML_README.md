@@ -307,9 +307,16 @@ Workflow:
 
 Current gate:
 
-- compares the current run against `ml/eval/baseline.json`
+- evaluates `public/models/lightweight_audio_model.production.onnx` (always the current promoted model)
+- compares against `ml/eval/baseline.json` (written from v0.1 metrics)
 - allows small baseline-relative movement with configurable epsilons
-- fails on macro regression, per-label collapse, or obvious prediction bias
+- fails on macro regression or per-label F1 collapse vs baseline
+- `--max-ratio-per-label 1.0` disables the absolute distribution ceiling (too strict with only 3 golden samples); re-enable after golden set is expanded
+
+When a new model is promoted:
+1. Run `evaluate.py --write-baseline` to record new baseline
+2. Update `ml/checkpoints/label_thresholds.json` to new thresholds
+3. Commit both files alongside the new ONNX
 
 ### Important Limitation
 

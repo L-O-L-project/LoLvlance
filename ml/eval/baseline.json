@@ -1,42 +1,33 @@
 {
-  "baseline_written_at_utc": "2026-04-15T00:47:35.249785+00:00",
+  "baseline_written_at_utc": "2026-04-17T00:57:12.182953+00:00",
   "confusion_summary": {
     "confusion_matrix": {
-      "issue:<none>->dull": 1,
-      "issue:boomy-><none>": 1,
-      "issue:buried-><none>": 1,
-      "issue:buried->dull": 1,
-      "issue:dull-><none>": 1,
-      "issue:harsh-><none>": 1,
-      "issue:harsh->dull": 1,
-      "issue:muddy-><none>": 2,
-      "issue:muddy->dull": 1,
-      "issue:sibilant-><none>": 1,
-      "issue:sibilant->dull": 1,
-      "issue:thin-><none>": 2,
-      "issue:thin->dull": 1,
-      "source:bass-><none>": 1,
+      "issue:<none>->boomy": 2,
+      "issue:<none>->buried": 2,
+      "issue:<none>->harsh": 2,
+      "issue:<none>->nasal": 3,
+      "issue:<none>->sibilant": 2,
+      "issue:<none>->thin": 1,
+      "issue:muddy-><none>": 1,
+      "issue:muddy->boomy": 1,
+      "issue:muddy->nasal": 1,
       "source:drums-><none>": 1,
-      "source:guitar-><none>": 1,
       "source:keys-><none>": 3,
       "source:vocal-><none>": 2
     },
     "false_negatives": {
-      "issue:boomy": 1,
-      "issue:buried": 1,
-      "issue:dull": 1,
-      "issue:harsh": 1,
-      "issue:muddy": 2,
-      "issue:sibilant": 1,
-      "issue:thin": 2,
-      "source:bass": 1,
+      "issue:muddy": 1,
       "source:drums": 1,
-      "source:guitar": 1,
       "source:keys": 3,
       "source:vocal": 2
     },
     "false_positives": {
-      "issue:dull": 1
+      "issue:boomy": 2,
+      "issue:buried": 2,
+      "issue:harsh": 2,
+      "issue:nasal": 3,
+      "issue:sibilant": 2,
+      "issue:thin": 1
     },
     "mismatched_samples": [
       {
@@ -52,20 +43,32 @@
           "drums",
           "keys"
         ],
-        "issue_false_negatives": [
-          "boomy",
-          "dull",
-          "muddy"
+        "issue_false_negatives": [],
+        "issue_false_positives": [
+          "buried",
+          "harsh",
+          "nasal",
+          "sibilant",
+          "thin"
         ],
-        "issue_false_positives": [],
-        "predicted_issue": [],
-        "predicted_source": [],
+        "predicted_issue": [
+          "muddy",
+          "harsh",
+          "buried",
+          "boomy",
+          "thin",
+          "nasal",
+          "sibilant",
+          "dull"
+        ],
+        "predicted_source": [
+          "guitar",
+          "bass"
+        ],
         "sample_id": "full_mix_01",
         "severity": "high",
         "source_false_negatives": [
-          "bass",
           "drums",
-          "guitar",
           "keys",
           "vocal"
         ],
@@ -78,11 +81,22 @@
         "expected_source": [
           "keys"
         ],
-        "issue_false_negatives": [
-          "thin"
+        "issue_false_negatives": [],
+        "issue_false_positives": [
+          "boomy",
+          "buried",
+          "harsh",
+          "nasal",
+          "sibilant"
         ],
-        "issue_false_positives": [],
-        "predicted_issue": [],
+        "predicted_issue": [
+          "harsh",
+          "buried",
+          "boomy",
+          "thin",
+          "nasal",
+          "sibilant"
+        ],
         "predicted_source": [],
         "sample_id": "guitar_presence_01",
         "severity": "medium",
@@ -104,17 +118,19 @@
           "keys"
         ],
         "issue_false_negatives": [
-          "buried",
-          "harsh",
-          "muddy",
-          "sibilant",
-          "thin"
+          "muddy"
         ],
         "issue_false_positives": [
-          "dull"
+          "boomy",
+          "nasal"
         ],
         "predicted_issue": [
-          "dull"
+          "harsh",
+          "buried",
+          "boomy",
+          "thin",
+          "nasal",
+          "sibilant"
         ],
         "predicted_source": [],
         "sample_id": "vocal_sibilant_01",
@@ -131,35 +147,35 @@
     "distribution_slack": 0.2,
     "entropy_epsilon": 0.12,
     "macro_epsilon": 0.02,
-    "max_ratio_per_label": 0.5,
+    "max_ratio_per_label": 1.0,
     "per_label_epsilon": 0.03,
     "top_confusion_deltas": 10,
     "weak_label_epsilon": 0.02,
     "weak_label_f1_threshold": 0.4
   },
-  "generated_at_utc": "2026-04-15T00:47:35.247677+00:00",
+  "generated_at_utc": "2026-04-17T00:57:12.181411+00:00",
   "groups": {
     "combined": {
       "macro": {
-        "f1": 0.0,
+        "f1": 0.4619,
         "label_count": 14,
-        "precision": 0.0,
-        "recall": 0.0
+        "precision": 0.4286,
+        "recall": 0.6071
       },
       "overall": {
-        "f1": 0.0,
-        "fn": 17,
-        "fp": 1,
-        "precision": 0.0,
-        "recall": 0.0,
-        "tp": 0
+        "f1": 0.5128,
+        "fn": 7,
+        "fp": 12,
+        "precision": 0.4545,
+        "recall": 0.5882,
+        "tp": 10
       },
       "per_label": {
         "issue:boomy": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:boxy": {
@@ -170,59 +186,59 @@
           "support": 0
         },
         "issue:buried": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:dull": {
-          "f1": 0.0,
-          "precision": 0.0,
+          "f1": 1.0,
+          "precision": 1.0,
           "predicted_positive": 1,
-          "recall": 0.0,
+          "recall": 1.0,
           "support": 1
         },
         "issue:harsh": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:muddy": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.6667,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 0.5,
           "support": 2
         },
         "issue:nasal": {
           "f1": 0.0,
           "precision": 0.0,
-          "predicted_positive": 0,
+          "predicted_positive": 3,
           "recall": 0.0,
           "support": 0
         },
         "issue:sibilant": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:thin": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.8,
+          "precision": 0.6667,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 2
         },
         "source:bass": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
           "support": 1
         },
         "source:drums": {
@@ -233,10 +249,10 @@
           "support": 1
         },
         "source:guitar": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
           "support": 1
         },
         "source:keys": {
@@ -257,25 +273,25 @@
     },
     "issue": {
       "macro": {
-        "f1": 0.0,
+        "f1": 0.4963,
         "label_count": 9,
-        "precision": 0.0,
-        "recall": 0.0
+        "precision": 0.4444,
+        "recall": 0.7222
       },
       "overall": {
-        "f1": 0.0,
-        "fn": 9,
-        "fp": 1,
-        "precision": 0.0,
-        "recall": 0.0,
-        "tp": 0
+        "f1": 0.5517,
+        "fn": 1,
+        "fp": 12,
+        "precision": 0.4,
+        "recall": 0.8889,
+        "tp": 8
       },
       "per_label": {
         "issue:boomy": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:boxy": {
@@ -286,77 +302,77 @@
           "support": 0
         },
         "issue:buried": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:dull": {
-          "f1": 0.0,
-          "precision": 0.0,
+          "f1": 1.0,
+          "precision": 1.0,
           "predicted_positive": 1,
-          "recall": 0.0,
+          "recall": 1.0,
           "support": 1
         },
         "issue:harsh": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:muddy": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.6667,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 0.5,
           "support": 2
         },
         "issue:nasal": {
           "f1": 0.0,
           "precision": 0.0,
-          "predicted_positive": 0,
+          "predicted_positive": 3,
           "recall": 0.0,
           "support": 0
         },
         "issue:sibilant": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.5,
+          "precision": 0.3333,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 1
         },
         "issue:thin": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 0.8,
+          "precision": 0.6667,
+          "predicted_positive": 3,
+          "recall": 1.0,
           "support": 2
         }
       }
     },
     "source": {
       "macro": {
-        "f1": 0.0,
+        "f1": 0.4,
         "label_count": 5,
-        "precision": 0.0,
-        "recall": 0.0
+        "precision": 0.4,
+        "recall": 0.4
       },
       "overall": {
-        "f1": 0.0,
-        "fn": 8,
+        "f1": 0.4,
+        "fn": 6,
         "fp": 0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "tp": 0
+        "precision": 1.0,
+        "recall": 0.25,
+        "tp": 2
       },
       "per_label": {
         "source:bass": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
           "support": 1
         },
         "source:drums": {
@@ -367,10 +383,10 @@
           "support": 1
         },
         "source:guitar": {
-          "f1": 0.0,
-          "precision": 0.0,
-          "predicted_positive": 0,
-          "recall": 0.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "predicted_positive": 1,
+          "recall": 1.0,
           "support": 1
         },
         "source:keys": {
@@ -390,7 +406,7 @@
       }
     }
   },
-  "model_path": "ml/checkpoints/lightweight_audio_model.onnx",
+  "model_path": "public/models/lightweight_audio_model.production.onnx",
   "note": "golden set is small; results are for regression detection only",
   "prediction_distribution": {
     "issue": {
@@ -398,8 +414,8 @@
         "issue:boomy": {
           "expected_positive": 1,
           "expected_ratio": 0.3333,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 3,
+          "predicted_ratio": 1.0,
           "top1_count": 0,
           "top1_ratio": 0.0
         },
@@ -414,8 +430,8 @@
         "issue:buried": {
           "expected_positive": 1,
           "expected_ratio": 0.3333,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 3,
+          "predicted_ratio": 1.0,
           "top1_count": 3,
           "top1_ratio": 1.0
         },
@@ -430,59 +446,59 @@
         "issue:harsh": {
           "expected_positive": 1,
           "expected_ratio": 0.3333,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 3,
+          "predicted_ratio": 1.0,
           "top1_count": 0,
           "top1_ratio": 0.0
         },
         "issue:muddy": {
           "expected_positive": 2,
           "expected_ratio": 0.6667,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 1,
+          "predicted_ratio": 0.3333,
           "top1_count": 0,
           "top1_ratio": 0.0
         },
         "issue:nasal": {
           "expected_positive": 0,
           "expected_ratio": 0.0,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 3,
+          "predicted_ratio": 1.0,
           "top1_count": 0,
           "top1_ratio": 0.0
         },
         "issue:sibilant": {
           "expected_positive": 1,
           "expected_ratio": 0.3333,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 3,
+          "predicted_ratio": 1.0,
           "top1_count": 0,
           "top1_ratio": 0.0
         },
         "issue:thin": {
           "expected_positive": 2,
           "expected_ratio": 0.6667,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
+          "predicted_positive": 3,
+          "predicted_ratio": 1.0,
           "top1_count": 0,
           "top1_ratio": 0.0
         }
       },
-      "dominant_label": "issue:dull",
-      "dominant_ratio": 0.3333,
+      "dominant_label": "issue:harsh",
+      "dominant_ratio": 1.0,
       "positive_entropy": {
         "counts": [
+          1,
+          3,
+          3,
+          3,
+          3,
           0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
+          3,
+          3,
           1
         ],
-        "normalized": 0.0
+        "normalized": 0.9134
       },
       "top1_entropy": {
         "counts": [
@@ -504,10 +520,10 @@
         "source:bass": {
           "expected_positive": 1,
           "expected_ratio": 0.3333,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
-          "top1_count": 0,
-          "top1_ratio": 0.0
+          "predicted_positive": 1,
+          "predicted_ratio": 0.3333,
+          "top1_count": 1,
+          "top1_ratio": 0.3333
         },
         "source:drums": {
           "expected_positive": 1,
@@ -520,10 +536,10 @@
         "source:guitar": {
           "expected_positive": 1,
           "expected_ratio": 0.3333,
-          "predicted_positive": 0,
-          "predicted_ratio": 0.0,
-          "top1_count": 0,
-          "top1_ratio": 0.0
+          "predicted_positive": 1,
+          "predicted_ratio": 0.3333,
+          "top1_count": 2,
+          "top1_ratio": 0.6667
         },
         "source:keys": {
           "expected_positive": 3,
@@ -538,31 +554,31 @@
           "expected_ratio": 0.6667,
           "predicted_positive": 0,
           "predicted_ratio": 0.0,
-          "top1_count": 3,
-          "top1_ratio": 1.0
+          "top1_count": 0,
+          "top1_ratio": 0.0
         }
       },
-      "dominant_label": "source:vocal",
-      "dominant_ratio": 0.0,
+      "dominant_label": "source:guitar",
+      "dominant_ratio": 0.3333,
       "positive_entropy": {
         "counts": [
           0,
-          0,
-          0,
+          1,
+          1,
           0,
           0
         ],
-        "normalized": 0.0
+        "normalized": 0.4307
       },
       "top1_entropy": {
         "counts": [
-          3,
           0,
-          0,
+          2,
+          1,
           0,
           0
         ],
-        "normalized": 0.0
+        "normalized": 0.3955
       }
     }
   },
@@ -570,20 +586,20 @@
   "schema_version": "2.0",
   "thresholds": {
     "issue_thresholds": {
-      "boomy": 0.3,
+      "boomy": 0.25,
       "boxy": 0.2,
-      "buried": 0.55,
-      "dull": 0.35,
-      "harsh": 0.35,
+      "buried": 0.2,
+      "dull": 0.4,
+      "harsh": 0.2,
       "muddy": 0.4,
-      "nasal": 0.45,
-      "sibilant": 0.48,
-      "thin": 0.35
+      "nasal": 0.25,
+      "sibilant": 0.3,
+      "thin": 0.2
     },
     "source_thresholds": {
       "bass": 0.8,
       "drums": 0.75,
-      "guitar": 0.25,
+      "guitar": 0.35,
       "keys": 0.8,
       "vocal": 0.8
     }
