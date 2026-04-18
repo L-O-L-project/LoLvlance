@@ -26,7 +26,7 @@ Korean version: `ML_README.ko.md`
 - Monitoring passes run on a `1.0` second stride in `src/app/hooks/useMonitoring.ts`.
 - The active runtime model is `v0.1-real-data` — the first real-data checkpoint, trained on MUSAN + OpenMIC-2018.
 - v0.2 and v0.3 uncovered two training pipeline bugs (resampler mismatch + always-positive collapse) and were not promoted.
-- v0.4 (`v0.4-clean-ratio`) is currently training with all root causes fixed; 40 epochs, PID 51567, log: `ml/train_v04.log`.
+- v0.4 (`v0.4-clean-ratio`) training complete — 40 epochs, best epoch 37, issue_f1=0.447, source_f1=0.598. Now the active production model. CI baseline updated to v0.4.
 - Product positioning should remain continuous monitoring and live session analysis, not instant-response AI.
 
 <a id="model-architecture"></a>
@@ -123,10 +123,10 @@ Summary:
 | Version | Status | Clips | Macro Issue F1 | Macro Source F1 | Notes |
 |---|---|---|---|---|---|
 | `v0.0-pipeline-check` | Archived | Synthetic | N/A | N/A | Pipeline validation |
-| `v0.1-real-data` | **Active** | 65,738 | 0.531 | 0.612 | CI gate passed |
+| `v0.1-real-data` | Superseded | 65,738 | 0.531 | 0.612 | Over-predicting; replaced by v0.4 |
 | `v0.2-fsd50k-extended` | Not promoted | ~85K | — | — | Resampler bug + always-positive |
 | `v0.3-resampler-fix` | Not promoted | ~85K | 0.156 | 0.511 | Resampler fixed; dataset bug |
-| `v0.4-clean-ratio` | **In training** | ~85K | TBD | TBD | All root causes fixed |
+| `v0.4-clean-ratio` | **Active** | ~85K | 0.447 | 0.598 | All root causes fixed; CI baseline updated |
 
 ### Pipeline Bugs Discovered and Fixed (Apr 16–17, 2026)
 
