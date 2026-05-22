@@ -8,6 +8,17 @@ The current product goal is simple:
 
 LoLvlance listens to microphone audio in the browser, analyzes a rolling audio window, updates guidance every few seconds, and helps the user decide what to check next. It is an assistive system, not an authority system.
 
+## Current Audit Status (May 2026)
+
+- Security dependency remediation is still in place: `npm audit` reports 0 vulnerabilities.
+- `npm run build` succeeds with the Vite browser app.
+- UX/error handling covers microphone permission waiting, recording, analyzing, result, failure, retry, timeout, low-confidence, and fallback states.
+- ML runtime hardening covers invalid audio, silence, clipping, ONNX input/output validation, confidence tiers, fallback warnings, and developer diagnostics.
+- The production ONNX artifact is preserved at `public/models/lightweight_audio_model.production.onnx`; it was not replaced.
+- No actual model-performance improvement is claimed. The candidate checkpoint was evaluated and not promoted because it regressed against the production artifact.
+- Golden evaluation now uses `eval/goldens/labels.json` as the central manifest, with `metadata.json` fallback support.
+- The current golden set has only 3 samples. It is useful for smoke/regression checks, not for production accuracy claims.
+
 ## Quick Links
 
 [![Project Overview](https://img.shields.io/badge/Project%20Overview-2563EB?style=for-the-badge&logo=bookstack&logoColor=white)](#project-overview)
@@ -130,7 +141,7 @@ This model:
 
 - was trained on real public audio (MUSAN + OpenMIC-2018, 65,738 clips)
 - is the first real-data checkpoint deployed to the browser
-- has been validated against the CI golden evaluation gate
+- has a valid browser ONNX contract; the current 3-sample golden gate still flags class-bias issues and is not a production benchmark
 - source detection is functional: guitar F1=0.82, drums AUROC=0.93, vocal AUROC=0.92
 
 A significant training pipeline overhaul is underway (v0.4). See `ml/model_history.md` for the full sequence of what was discovered and fixed.
@@ -143,7 +154,7 @@ A significant training pipeline overhaul is underway (v0.4). See `ml/model_histo
 | `v0.1-real-data` | **Active (browser default)** | MUSAN + OpenMIC (65K) | Guitar F1=0.82, issue macro F1=0.53 |
 | `v0.2-fsd50k-extended` | Not promoted | + FSD50K (85K) | Resampler bug + always-positive predictions |
 | `v0.3-resampler-fix` | Not promoted | Same as v0.2 | Resampler fixed; still always-positive (dataset bug) |
-| `v0.4-clean-ratio` | **In training** | Same as v0.2 | All root causes fixed; 40 epochs |
+| `v0.4-clean-ratio` | Not promoted | Same as v0.2 | Candidate status only; production ONNX was not replaced |
 
 Full history and per-label metrics: `ml/model_history.md`
 
@@ -454,6 +465,7 @@ python -m venv .venv-ml
 
 ```powershell
 .\.venv-ml\Scripts\python.exe ml\eval\evaluate.py `
+  --labels-path eval\goldens\labels.json `
   --goldens-dir eval\goldens `
   --model-path ml\checkpoints\lightweight_audio_model.onnx `
   --thresholds-path ml\checkpoints\label_thresholds.json `
@@ -575,14 +587,14 @@ python -m ml.train \
 
 ### Immediate
 
-- monitor `v0.4-clean-ratio` training completion (PID 51567, log: `ml/train_v04.log`)
+- expand the labeled golden set and evaluate future candidates through `eval/goldens/labels.json`
 - run eval after v0.4 completes and promote if CI gate passes
 - update `ml/eval/baseline.json` on first gate-passing model
 - expand the golden dataset beyond the current 3-sample starter set
 
 ### Short Term
 
-- promote `v0.4-clean-ratio` if issue F1 reaches ≥0.40 macro and gate passes
+- promote a future candidate only if it passes ONNX contract validation and the manifest-based golden gate without class-bias regressions
 - close the feedback loop: periodically run `ml/ingest_feedback.py` on exported browser feedback and merge into the training manifest
 - improve threshold calibration with a larger golden evaluation set
 - promote learned EQ outputs beyond the internal training path

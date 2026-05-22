@@ -1,5 +1,16 @@
 # LoLvlance
 
+## 현재 점검 상태 (2026년 5월)
+
+- 보안 의존성 보완은 유지되어 있으며 `npm audit` 결과는 취약점 0개입니다.
+- Vite 브라우저 앱은 `npm run build`로 정상 빌드됩니다.
+- UX/오류 처리는 마이크 권한 대기, 녹음, 분석 중, 결과, 실패, 재시도, 타임아웃, 낮은 신뢰도, fallback 상태를 다룹니다.
+- ML 런타임은 invalid audio, silence, clipping, ONNX 입력/출력 검증, confidence tier, fallback warning, 개발자 진단 로그를 포함합니다.
+- 프로덕션 ONNX 아티팩트는 `public/models/lightweight_audio_model.production.onnx`에 그대로 유지되어 있으며 교체되지 않았습니다.
+- 실제 모델 성능 개선은 아직 주장하지 않습니다. 후보 checkpoint는 평가 결과 production artifact보다 회귀하여 promote하지 않았습니다.
+- golden 평가는 이제 `eval/goldens/labels.json`을 중앙 manifest로 사용하며, 기존 `metadata.json` fallback도 유지합니다.
+- 현재 golden set은 3개 샘플뿐입니다. smoke/regression 확인용이며 production accuracy를 주장할 수 없습니다.
+
 LoLvlance는 교회 사운드팀, 예배팀 자원봉사자, 소규모 라이브 운영자를 위한 브라우저 기반 오디오 모니터링 시스템입니다.
 
 현재 제품 목표는 단순합니다.
@@ -454,6 +465,7 @@ python -m venv .venv-ml
 
 ```powershell
 .\.venv-ml\Scripts\python.exe ml\eval\evaluate.py `
+  --labels-path eval\goldens\labels.json `
   --goldens-dir eval\goldens `
   --model-path ml\checkpoints\lightweight_audio_model.onnx `
   --thresholds-path ml\checkpoints\label_thresholds.json `

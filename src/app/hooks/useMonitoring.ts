@@ -162,7 +162,7 @@ function appendRuntimeWarnings(result: AnalysisResult, warnings: AnalysisRuntime
 }
 
 function withDiagnosticsLog(result: AnalysisResult) {
-  if (result.diagnostics) {
+  if (import.meta.env.DEV && result.diagnostics) {
     console.info('[audio-analysis:diagnostics]', {
       engine: result.engine,
       warnings: result.runtimeWarnings?.map((warning) => warning.code) ?? [],

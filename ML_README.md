@@ -1,5 +1,14 @@
 # ML README
 
+## Current Audit Status (May 2026)
+
+- The active runtime model remains `v0.1-real-data`; the production ONNX artifact was not replaced.
+- A newer checkpoint candidate was evaluated and not promoted because it regressed against the production artifact.
+- No actual model-performance improvement is claimed yet.
+- The current golden set has only 3 samples, so it is a regression/smoke check and not a production accuracy benchmark.
+- Golden evaluation now uses `eval/goldens/labels.json` as the central manifest, with per-sample `metadata.json` fallback support.
+- `npm audit` reports 0 vulnerabilities and `npm run build` succeeds.
+
 This document covers the ML-specific part of LoLvlance:
 
 - current runtime model status and training results
@@ -26,7 +35,7 @@ Korean version: `ML_README.ko.md`
 - Monitoring passes run on a `1.0` second stride in `src/app/hooks/useMonitoring.ts`.
 - The active runtime model is `v0.1-real-data` — the first real-data checkpoint, trained on MUSAN + OpenMIC-2018.
 - v0.2 and v0.3 uncovered two training pipeline bugs (resampler mismatch + always-positive collapse) and were not promoted.
-- v0.4 (`v0.4-clean-ratio`) training complete — 40 epochs, best epoch 37, issue_f1=0.447, source_f1=0.598. Now the active production model. CI baseline updated to v0.4.
+- No newer candidate is active. A checkpoint candidate was evaluated after the runtime/evaluation improvements and was not promoted because it regressed against the production ONNX artifact.
 - Product positioning should remain continuous monitoring and live session analysis, not instant-response AI.
 
 <a id="model-architecture"></a>
@@ -123,10 +132,10 @@ Summary:
 | Version | Status | Clips | Macro Issue F1 | Macro Source F1 | Notes |
 |---|---|---|---|---|---|
 | `v0.0-pipeline-check` | Archived | Synthetic | N/A | N/A | Pipeline validation |
-| `v0.1-real-data` | Superseded | 65,738 | 0.531 | 0.612 | Over-predicting; replaced by v0.4 |
+| `v0.1-real-data` | **Active browser default** | 65,738 | 0.531 | 0.612 | Production artifact preserved; newer candidates not promoted |
 | `v0.2-fsd50k-extended` | Not promoted | ~85K | — | — | Resampler bug + always-positive |
 | `v0.3-resampler-fix` | Not promoted | ~85K | 0.156 | 0.511 | Resampler fixed; dataset bug |
-| `v0.4-clean-ratio` | **Active** | ~85K | 0.447 | 0.598 | All root causes fixed; CI baseline updated |
+| `v0.4-clean-ratio` | Not promoted | ~85K | 0.447 | 0.598 | Candidate status only; production ONNX was not replaced |
 
 ### Pipeline Bugs Discovered and Fixed (Apr 16–17, 2026)
 
@@ -277,7 +286,7 @@ ml/eval/evaluate.py
 
 The evaluator:
 
-- loads golden sample metadata
+- loads `eval/goldens/labels.json` as the central manifest, with per-sample `metadata.json` fallback
 - runs model inference
 - computes precision, recall, and F1 for issue and source labels
 - prints a confusion summary
@@ -366,7 +375,7 @@ These tests are meant to make that failure mode visible.
 
 ### What Still Needs Improvement
 
-- `v0.4-clean-ratio` is in training — until it completes and passes CI, `v0.1-real-data` remains the only promoted model
+- `v0.1-real-data` remains the only promoted browser model; newer candidates require a larger labeled golden set and a passing manifest-based evaluation gate
 - CI golden set has only 3 samples — not a real production benchmark; must be expanded
 - feedback ingestion is manual (export → script → retrain), not automated
 - browser EQ output is still single-band compatibility contract, not full multi-band

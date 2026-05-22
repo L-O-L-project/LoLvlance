@@ -1,5 +1,14 @@
 # ML README
 
+## 현재 점검 상태 (2026년 5월)
+
+- 활성 런타임 모델은 `v0.1-real-data`이며 production ONNX 아티팩트는 교체되지 않았습니다.
+- 후속 후보 checkpoint는 production artifact보다 평가 결과가 나빠 promote하지 않았습니다.
+- 실제 모델 성능 개선은 아직 주장하지 않습니다.
+- 현재 golden set은 3개 샘플뿐이므로 regression/smoke 확인용이며 production accuracy를 주장할 수 없습니다.
+- golden 평가는 `eval/goldens/labels.json`을 중앙 manifest로 사용하고, 기존 per-sample `metadata.json` fallback을 유지합니다.
+- `npm audit`는 취약점 0개이고 `npm run build`는 성공합니다.
+
 이 문서는 LoLvlance의 ML 관련 영역만 별도로 설명합니다.
 
 - 현재 런타임 모델 상태와 학습 결과
@@ -252,7 +261,7 @@ ml/eval/evaluate.py
 
 수행 내용:
 
-- golden sample metadata 로드
+- `eval/goldens/labels.json`을 중앙 manifest로 로드하고, 기존 per-sample `metadata.json` fallback 유지
 - 모델 추론 실행
 - issue/source 레이블의 precision, recall, F1 계산
 - confusion summary 출력

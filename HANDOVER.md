@@ -1,5 +1,15 @@
 # LoLvlance Handover
 
+## Current Audit Status (May 2026)
+
+- The browser monitoring path works end to end with the mobile-first UI.
+- The active browser model remains `v0.1-real-data`; the production ONNX artifact was not replaced.
+- A newer checkpoint candidate was evaluated and not promoted because it regressed against the production artifact.
+- No actual model-performance improvement is claimed yet.
+- Golden evaluation now uses `eval/goldens/labels.json` as the central manifest, with per-sample `metadata.json` fallback support.
+- The current golden set has only 3 samples, so it is a regression/smoke check and not a production accuracy benchmark.
+- `npm audit` reports 0 vulnerabilities and `npm run build` succeeds.
+
 This document is the technical handover for the current LoLvlance codebase.
 
 It is written to help the next engineer understand what is actually implemented, what is isolated for safety, and what still should not be treated as production-ready.
@@ -119,7 +129,7 @@ This model:
 
 - was trained on real public audio (MUSAN + OpenMIC-2018, 65,738 clips)
 - is the first real-data checkpoint deployed to the browser
-- has been validated through the CI golden evaluation gate
+- has a valid browser ONNX contract; the current 3-sample golden gate still flags class-bias issues and is not a production benchmark
 - produces meaningful predictions: guitar F1=0.82, drums AUROC=0.93, vocal AUROC=0.92, muddy AUROC=0.87
 - has known weak spots: `boxy` F1=0.0, `nasal`/`thin`/`sibilant` AUROC near 0.56–0.60
 
@@ -201,7 +211,7 @@ Three model generations have been trained. See `ml/model_history.md` for full de
 | `v0.1-real-data` | **Active (browser default)** | MUSAN + OpenMIC (65K) | Passed CI gate |
 | `v0.2-fsd50k-extended` | Not promoted | + FSD50K (85K) | Resampler bug + always-positive |
 | `v0.3-resampler-fix` | Not promoted | Same as v0.2 | Resampler fixed; training dataset bug |
-| `v0.4-clean-ratio` | **In training** | Same as v0.2 | All root causes fixed; 40 epochs |
+| `v0.4-clean-ratio` | Not promoted | Same as v0.2 | Candidate status only; production ONNX was not replaced |
 
 ### Runtime Controls
 
@@ -487,6 +497,7 @@ python -m venv .venv-ml
 
 ```powershell
 .\.venv-ml\Scripts\python.exe ml\eval\evaluate.py `
+  --labels-path eval\goldens\labels.json `
   --goldens-dir eval\goldens `
   --model-path ml\checkpoints\lightweight_audio_model.onnx `
   --thresholds-path ml\checkpoints\label_thresholds.json `
@@ -560,13 +571,13 @@ python -m ml.train \
 
 ### Immediate
 
-- monitor `v0.4-clean-ratio` training (PID 51567, log: `ml/train_v04.log`, 40 epochs)
+- expand the labeled golden set and evaluate future candidates through `eval/goldens/labels.json`
 - when complete: run `ml/eval/evaluate.py` with new ONNX and confirm CI gate passes
 - if gate passes: run `--write-baseline` to lock new baseline, then promote to browser
 
 ### Short Term
 
-- evaluate v0.4 against golden set; promote if issue macro F1 ≥ 0.40 and gate passes
+- promote a future candidate only if it passes ONNX contract validation and the manifest-based golden gate without class-bias regressions
 - expand the golden evaluation set beyond 3 samples — CI gate with only 3 samples is not a real benchmark
 - run feedback ingestion cycle: export browser feedback → `ml/ingest_feedback.py` → merge manifest → retrain
 - improve threshold calibration with a larger golden evaluation set
@@ -608,4 +619,4 @@ There is a difference between:
 - **the pipeline works**
 - **the model is trustworthy**
 
-As of Apr 17, 2026, `v0.1-real-data` is still the active browser default. The model is functional and passed CI evaluation, but three follow-up runs (v0.2, v0.3, v0.4) revealed that the training pipeline had two serious bugs that prevented the model from learning to discriminate issues correctly. Both bugs are now fixed in v0.4. Until v0.4 is evaluated and promoted, `v0.1-real-data` remains the production checkpoint.
+As of the May 2026 audit, `v0.1-real-data` is still the active browser default. The production ONNX artifact was preserved. A newer checkpoint candidate was evaluated and not promoted because it regressed against the production artifact; future promotion requires a larger labeled golden set and a passing manifest-based evaluation gate.

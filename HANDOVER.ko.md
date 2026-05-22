@@ -1,5 +1,15 @@
 # LoLvlance Handover
 
+## 현재 점검 상태 (2026년 5월)
+
+- 브라우저 모니터링 경로는 모바일 우선 UI로 end-to-end 동작합니다.
+- 활성 브라우저 모델은 `v0.1-real-data`이며 production ONNX 아티팩트는 교체되지 않았습니다.
+- 후속 후보 checkpoint는 production artifact보다 평가 결과가 나빠 promote하지 않았습니다.
+- 실제 모델 성능 개선은 아직 주장하지 않습니다.
+- golden 평가는 `eval/goldens/labels.json`을 중앙 manifest로 사용하고, 기존 `metadata.json` fallback을 유지합니다.
+- 현재 golden set은 3개 샘플뿐이므로 regression/smoke 확인용이며 production accuracy를 주장할 수 없습니다.
+- `npm audit`는 취약점 0개이고 `npm run build`는 성공합니다.
+
 이 문서는 현재 LoLvlance 코드베이스를 위한 기술 인수인계 문서입니다.
 
 다음 엔지니어가 무엇이 실제로 구현되어 있는지, 무엇이 안전을 위해 격리되어 있는지, 그리고 무엇을 아직 프로덕션 준비 상태로 보면 안 되는지 빠르게 이해하도록 돕는 것이 목적입니다.
@@ -462,6 +472,7 @@ python -m venv .venv-ml
 
 ```powershell
 .\.venv-ml\Scripts\python.exe ml\eval\evaluate.py `
+  --labels-path eval\goldens\labels.json `
   --goldens-dir eval\goldens `
   --model-path ml\checkpoints\lightweight_audio_model.onnx `
   --thresholds-path ml\checkpoints\label_thresholds.json `
