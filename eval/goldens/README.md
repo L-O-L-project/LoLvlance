@@ -18,7 +18,22 @@ eval/goldens/
     metadata.json
 ```
 
-`metadata.json` is kept for compatibility with `ml/eval/evaluate.py`. `labels.json` is the central manifest for richer dataset management and future tooling.
+`labels.json` is the central manifest used by `ml/eval/evaluate.py`. `metadata.json` is kept for backward compatibility and quick sample-level inspection.
+
+Validate labels without model inference:
+
+```bash
+python ml/eval/validate_labels.py --labels-path eval/goldens/labels.json
+```
+
+Evaluate a model using the central manifest:
+
+```bash
+python ml/eval/evaluate.py \
+  --labels-path eval/goldens/labels.json \
+  --model-path public/models/lightweight_audio_model.production.onnx \
+  --thresholds-path ml/checkpoints/label_thresholds.json
+```
 
 ## Label Sets
 

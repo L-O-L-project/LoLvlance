@@ -18,6 +18,12 @@ It does not claim that the current model is production accurate. The current gol
 Run:
 
 ```bash
+python ml/eval/validate_labels.py --labels-path eval/goldens/labels.json
+```
+
+Then run:
+
+```bash
 python ml/validate_onnx_contract.py --model-path <candidate.onnx>
 ```
 
@@ -68,12 +74,13 @@ Run:
 
 ```bash
 python ml/eval/evaluate.py \
+  --labels-path eval/goldens/labels.json \
   --model-path <candidate.onnx> \
   --thresholds-path ml/checkpoints/label_thresholds.json \
   --report-json-path ml/eval/<candidate>_report.json
 ```
 
-The evaluator currently uses per-sample `metadata.json` files under `eval/goldens/`. Keep `labels.json` synchronized until the evaluator is extended to consume the central manifest directly.
+The evaluator uses `labels.json` as the central manifest when it exists. It falls back to per-sample `metadata.json` only for backward compatibility.
 
 ## Candidate Comparison Rules
 

@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 import numpy as np
 import onnxruntime as ort
+import soundfile as sf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -38,10 +39,25 @@ NONE_LABEL = "<none>"
 class GoldenSample:
     sample_id: str
     audio_path: Path
-    metadata_path: Path
+    metadata_path: Path | None
     expected_issue: tuple[str, ...]
     expected_source: tuple[str, ...]
     severity: str
+    split: str = "regression"
+    label_quality: str = "unknown"
+    flags: dict[str, bool] | None = None
+
+
+@dataclass(frozen=True)
+class DatasetLoadReport:
+    source: str
+    labels_path: str | None
+    loaded_sample_count: int
+    skipped_samples: list[dict[str, str]]
+    issue_label_distribution: dict[str, int]
+    source_label_distribution: dict[str, int]
+    label_quality_distribution: dict[str, int]
+    audio_quality_flags_summary: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -127,19 +143,19 @@ def validate_onnx_contract(session: ort.InferenceSession) -> dict[str, Any]:
         )
 
     for output_name, class_count in required_outputs.items():
-      if output_name not in output_by_name:
-          raise RuntimeError(f"Missing ONNX output '{output_name}'. Found: {sorted(output_by_name)}")
+        if output_name not in output_by_name:
+            raise RuntimeError(f"Missing ONNX output '{output_name}'. Found: {sorted(output_by_name)}")
 
-      output = output_by_name[output_name]
-      if output.type != "tensor(float)":
-          raise RuntimeError(f"Expected '{output_name}' dtype tensor(float), received {output.type}.")
-      if len(output.shape) != 2:
-          raise RuntimeError(f"Expected '{output_name}' to be rank-2, received shape {output.shape}.")
-      static_last_dim = output.shape[1]
-      if isinstance(static_last_dim, int) and static_last_dim != class_count:
-          raise RuntimeError(
-              f"Expected '{output_name}' last dimension {class_count}, received {static_last_dim}."
-          )
+        output = output_by_name[output_name]
+        if output.type != "tensor(float)":
+            raise RuntimeError(f"Expected '{output_name}' dtype tensor(float), received {output.type}.")
+        if len(output.shape) != 2:
+            raise RuntimeError(f"Expected '{output_name}' to be rank-2, received shape {output.shape}.")
+        static_last_dim = output.shape[1]
+        if isinstance(static_last_dim, int) and static_last_dim != class_count:
+            raise RuntimeError(
+                f"Expected '{output_name}' last dimension {class_count}, received {static_last_dim}."
+            )
 
     return {
         "input": {
@@ -163,6 +179,12 @@ def validate_onnx_contract(session: ort.InferenceSession) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate LoLvlance ONNX checkpoints against golden audio samples.")
     parser.add_argument("--goldens-dir", type=Path, default=Path("eval/goldens"))
+    parser.add_argument(
+        "--labels-path",
+        type=Path,
+        default=Path("eval/goldens/labels.json"),
+        help="Central golden dataset manifest. Used when present; falls back to per-sample metadata.json otherwise.",
+    )
     parser.add_argument("--model-path", type=Path, default=Path("ml/checkpoints/lightweight_audio_model.onnx"))
     parser.add_argument("--thresholds-path", type=Path, default=Path("ml/checkpoints/label_thresholds.json"))
     parser.add_argument("--baseline-path", type=Path, default=Path("ml/eval/baseline.json"))
@@ -191,7 +213,16 @@ def load_thresholds(thresholds_path: Path) -> tuple[dict[str, float], dict[str, 
     return issue_thresholds, source_thresholds
 
 
-def discover_golden_samples(goldens_dir: Path) -> list[GoldenSample]:
+def load_golden_dataset(goldens_dir: Path, labels_path: Path | None = None) -> tuple[list[GoldenSample], DatasetLoadReport]:
+    if labels_path is not None and labels_path.exists():
+        samples = discover_golden_samples_from_manifest(goldens_dir, labels_path)
+        return samples, build_dataset_load_report(samples, source="labels_manifest", labels_path=labels_path, skipped_samples=[])
+
+    samples = discover_golden_samples_from_metadata(goldens_dir)
+    return samples, build_dataset_load_report(samples, source="metadata_fallback", labels_path=None, skipped_samples=[])
+
+
+def discover_golden_samples_from_metadata(goldens_dir: Path) -> list[GoldenSample]:
     if not goldens_dir.exists():
         raise FileNotFoundError(f"Golden directory does not exist: {goldens_dir}")
 
@@ -228,6 +259,69 @@ def discover_golden_samples(goldens_dir: Path) -> list[GoldenSample]:
                     metadata_path=metadata_path,
                 ),
                 severity=str(payload.get("severity", "unknown")).strip() or "unknown",
+                label_quality="unknown",
+                flags=create_default_flags(),
+            )
+        )
+
+    return samples
+
+
+def discover_golden_samples_from_manifest(goldens_dir: Path, labels_path: Path) -> list[GoldenSample]:
+    payload = json.loads(labels_path.read_text(encoding="utf-8"))
+    manifest_dir = labels_path.parent
+    samples_payload = payload.get("samples")
+
+    if not isinstance(samples_payload, list):
+        raise ValueError(f"labels.json must contain a 'samples' array: {labels_path}")
+
+    seen_sample_ids: set[str] = set()
+    samples: list[GoldenSample] = []
+
+    for index, sample_payload in enumerate(samples_payload):
+        if not isinstance(sample_payload, dict):
+            raise ValueError(f"Sample entry #{index} must be an object in {labels_path}")
+
+        sample_id = require_non_empty_string(sample_payload, "sample_id", labels_path, index)
+        if sample_id in seen_sample_ids:
+            raise ValueError(f"Duplicate sample_id '{sample_id}' in {labels_path}")
+        seen_sample_ids.add(sample_id)
+
+        relative_file = require_non_empty_string(sample_payload, "file", labels_path, index)
+        audio_path = (manifest_dir / relative_file).resolve()
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Missing audio file for sample '{sample_id}': {audio_path}")
+
+        expected_issue = normalize_expected_labels(
+            require_label_list(sample_payload, "expected_issue", labels_path, index),
+            ISSUE_LABELS,
+            field_name="expected_issue",
+            metadata_path=labels_path,
+        )
+
+        expected_source = normalize_expected_labels(
+            require_label_list(sample_payload, "expected_source", labels_path, index),
+            SOURCE_LABELS,
+            field_name="expected_source",
+            metadata_path=labels_path,
+        )
+
+        recording_condition = require_mapping(sample_payload, "recording_condition", labels_path, index)
+        validate_audio_metadata(audio_path, sample_id, recording_condition, labels_path)
+        flags = normalize_flags(require_mapping(sample_payload, "flags", labels_path, index), sample_id, labels_path)
+        metadata_path = manifest_dir / sample_id / "metadata.json"
+
+        samples.append(
+            GoldenSample(
+                sample_id=sample_id,
+                audio_path=audio_path,
+                metadata_path=metadata_path if metadata_path.exists() else None,
+                expected_issue=expected_issue,
+                expected_source=expected_source,
+                severity=str(sample_payload.get("severity", "unknown")).strip() or "unknown",
+                split=str(sample_payload.get("split", "regression")).strip() or "regression",
+                label_quality=str(sample_payload.get("label_quality", "unknown")).strip() or "unknown",
+                flags=flags,
             )
         )
 
@@ -257,6 +351,126 @@ def normalize_expected_labels(
             normalized.append(label)
             seen.add(label)
     return tuple(normalized)
+
+
+def require_non_empty_string(payload: dict[str, Any], field_name: str, source_path: Path, index: int) -> str:
+    value = payload.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Sample entry #{index} is missing non-empty '{field_name}' in {source_path}")
+    return value.strip()
+
+
+def require_label_list(payload: dict[str, Any], field_name: str, source_path: Path, index: int) -> list[Any]:
+    value = payload.get(field_name)
+    if not isinstance(value, list):
+        raise ValueError(f"Sample entry #{index} is missing list '{field_name}' in {source_path}")
+    return value
+
+
+def require_mapping(payload: dict[str, Any], field_name: str, source_path: Path, index: int) -> dict[str, Any]:
+    value = payload.get(field_name)
+    if not isinstance(value, dict):
+        raise ValueError(f"Sample entry #{index} is missing object '{field_name}' in {source_path}")
+    return value
+
+
+def validate_audio_metadata(
+    audio_path: Path,
+    sample_id: str,
+    recording_condition: dict[str, Any],
+    labels_path: Path,
+) -> None:
+    expected_sample_rate = recording_condition.get("sample_rate_hz")
+    expected_duration = recording_condition.get("duration_seconds")
+
+    if expected_sample_rate is None and expected_duration is None:
+        return
+
+    audio_info = sf.info(audio_path.as_posix())
+
+    if expected_sample_rate is not None and int(expected_sample_rate) != int(audio_info.samplerate):
+        raise ValueError(
+            f"sample_rate_hz mismatch for sample '{sample_id}' in {labels_path}: "
+            f"manifest={expected_sample_rate}, audio={audio_info.samplerate}"
+        )
+
+    if expected_duration is not None:
+        observed_duration = audio_info.frames / float(audio_info.samplerate)
+        if abs(float(expected_duration) - observed_duration) > 0.05:
+            raise ValueError(
+                f"duration_seconds mismatch for sample '{sample_id}' in {labels_path}: "
+                f"manifest={float(expected_duration):.3f}, audio={observed_duration:.3f}"
+            )
+
+
+def normalize_flags(flags: dict[str, Any], sample_id: str, labels_path: Path) -> dict[str, bool]:
+    required_flags = ("contains_clipping", "contains_silence", "high_noise_floor", "low_confidence_label")
+    normalized: dict[str, bool] = {}
+
+    for flag in required_flags:
+        value = flags.get(flag)
+        if not isinstance(value, bool):
+            raise ValueError(f"Flag '{flag}' for sample '{sample_id}' must be boolean in {labels_path}")
+        normalized[flag] = value
+
+    return normalized
+
+
+def create_default_flags() -> dict[str, bool]:
+    return {
+        "contains_clipping": False,
+        "contains_silence": False,
+        "high_noise_floor": False,
+        "low_confidence_label": False,
+    }
+
+
+def build_dataset_load_report(
+    samples: list[GoldenSample],
+    *,
+    source: str,
+    labels_path: Path | None,
+    skipped_samples: list[dict[str, str]],
+) -> DatasetLoadReport:
+    issue_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    label_quality_counts: Counter[str] = Counter()
+    flags_summary: Counter[str] = Counter()
+
+    for sample in samples:
+        issue_counts.update(sample.expected_issue)
+        source_counts.update(sample.expected_source)
+        label_quality_counts.update([sample.label_quality])
+        for flag, enabled in (sample.flags or create_default_flags()).items():
+            if enabled:
+                flags_summary[flag] += 1
+
+    return DatasetLoadReport(
+        source=source,
+        labels_path=None if labels_path is None else labels_path.as_posix(),
+        loaded_sample_count=len(samples),
+        skipped_samples=skipped_samples,
+        issue_label_distribution={label: int(issue_counts.get(label, 0)) for label in ISSUE_LABELS},
+        source_label_distribution={label: int(source_counts.get(label, 0)) for label in SOURCE_LABELS},
+        label_quality_distribution=dict(sorted(label_quality_counts.items())),
+        audio_quality_flags_summary={
+            flag: int(flags_summary.get(flag, 0))
+            for flag in ("contains_clipping", "contains_silence", "high_noise_floor", "low_confidence_label")
+        },
+    )
+
+
+def dataset_load_report_to_dict(report: DatasetLoadReport) -> dict[str, Any]:
+    return {
+        "source": report.source,
+        "labels_path": report.labels_path,
+        "loaded_sample_count": report.loaded_sample_count,
+        "skipped_samples": report.skipped_samples,
+        "issue_label_distribution": report.issue_label_distribution,
+        "source_label_distribution": report.source_label_distribution,
+        "label_quality_distribution": report.label_quality_distribution,
+        "audio_quality_flags_summary": report.audio_quality_flags_summary,
+    }
 
 
 def select_labels(probabilities: dict[str, float], thresholds: dict[str, float]) -> tuple[str, ...]:
@@ -564,6 +778,7 @@ def build_report(
     issue_thresholds: dict[str, float],
     source_thresholds: dict[str, float],
     onnx_contract: dict[str, Any],
+    dataset_report: DatasetLoadReport,
 ) -> dict[str, Any]:
     issue_metrics = compute_metrics(predictions, "issue", ISSUE_LABELS, "issue")
     source_metrics = compute_metrics(predictions, "source", SOURCE_LABELS, "source")
@@ -576,6 +791,7 @@ def build_report(
         "model_path": model_path.as_posix(),
         "onnx_contract": onnx_contract,
         "sample_count": len(predictions),
+        "dataset": dataset_load_report_to_dict(dataset_report),
         "thresholds": {
             "issue_thresholds": issue_thresholds,
             "source_thresholds": source_thresholds,
@@ -594,7 +810,10 @@ def build_report(
             {
                 "sample_id": prediction.sample.sample_id,
                 "severity": prediction.sample.severity,
-                "file": prediction.sample.audio_path.name,
+                "split": prediction.sample.split,
+                "label_quality": prediction.sample.label_quality,
+                "flags": prediction.sample.flags or create_default_flags(),
+                "file": prediction.sample.audio_path.as_posix(),
                 "expected_issue": list(prediction.sample.expected_issue),
                 "predicted_issue": list(prediction.predicted_issue),
                 "expected_source": list(prediction.sample.expected_source),
@@ -950,6 +1169,13 @@ def print_report(report: dict[str, Any]) -> None:
     print("LoLvlance golden evaluation")
     print(f"warning: {SMALL_GOLDEN_SET_WARNING}")
     print(f"status: {gate['status'].upper()}")
+    dataset = report.get("dataset", {})
+    print(
+        "dataset: "
+        f"source={dataset.get('source', 'unknown')} "
+        f"loaded={dataset.get('loaded_sample_count', report.get('sample_count'))} "
+        f"skipped={len(dataset.get('skipped_samples', []))}"
+    )
     print(
         "combined macro F1: "
         f"{combined_macro['f1']:.4f} "
@@ -998,6 +1224,16 @@ def print_report(report: dict[str, Any]) -> None:
                 f"top1_ratio={float(metrics['top1_ratio']):.4f}"
             )
 
+    print("label dataset distribution:")
+    for namespace, key in (("issue", "issue_label_distribution"), ("source", "source_label_distribution")):
+        values = dataset.get(key, {})
+        if values:
+            print(f"  {namespace}: {values}")
+    if dataset.get("label_quality_distribution"):
+        print(f"  label_quality: {dataset['label_quality_distribution']}")
+    if dataset.get("audio_quality_flags_summary"):
+        print(f"  audio_flags: {dataset['audio_quality_flags_summary']}")
+
     confusion_changes = gate["checks"]["confusion_shift_top_changes"]
     if confusion_changes:
         print("top confusion shifts vs baseline:")
@@ -1021,11 +1257,18 @@ def main() -> int:
     args = parse_args()
 
     issue_thresholds, source_thresholds = load_thresholds(args.thresholds_path)
-    samples = discover_golden_samples(args.goldens_dir)
+    samples, dataset_report = load_golden_dataset(args.goldens_dir, args.labels_path)
     model = OnnxAudioModel(args.model_path)
     predictions = evaluate_samples(samples, model, issue_thresholds, source_thresholds)
 
-    report = build_report(predictions, args.model_path, issue_thresholds, source_thresholds, model.contract)
+    report = build_report(
+        predictions,
+        args.model_path,
+        issue_thresholds,
+        source_thresholds,
+        model.contract,
+        dataset_report,
+    )
     baseline_payload = strip_samples_from_report(report) if args.write_baseline else load_baseline(args.baseline_path)
     gate_config = build_gate_config(args)
     report["gate"] = build_gate_report(report, baseline_payload, gate_config=gate_config)
