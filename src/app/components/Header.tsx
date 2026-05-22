@@ -2,7 +2,7 @@ import { Languages } from 'lucide-react';
 import { type Language, translations } from '../translations';
 
 interface HeaderProps {
-  state: 'idle' | 'listening' | 'result' | 'monitoring';
+  state: 'idle' | 'listening' | 'result' | 'monitoring' | 'error';
   language: Language;
   onToggleLanguage: () => void;
   statusLabel?: string;
@@ -14,7 +14,8 @@ const stateColors = {
   idle: 'text-gray-400',
   listening: 'text-purple-400',
   result: 'text-blue-400',
-  monitoring: 'text-green-400'
+  monitoring: 'text-green-400',
+  error: 'text-amber-300'
 };
 
 export function Header({
@@ -31,7 +32,8 @@ export function Header({
     idle: t.ready,
     listening: t.listening,
     result: t.result,
-    monitoring: t.monitoring
+    monitoring: t.monitoring,
+    error: t.analysisFailedTitle
   };
 
   return (

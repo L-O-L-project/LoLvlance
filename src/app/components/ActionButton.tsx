@@ -3,7 +3,7 @@ import { Mic, RotateCcw, Play, Square } from 'lucide-react';
 import { type Language, translations } from '../translations';
 
 interface ActionButtonProps {
-  state: 'idle' | 'listening' | 'result' | 'monitoring';
+  state: 'idle' | 'listening' | 'result' | 'monitoring' | 'error';
   onAnalyze: () => void;
   onReset: () => void;
   onStartMonitoring: () => void;
@@ -16,6 +16,7 @@ export function ActionButton({ state, onAnalyze, onReset, onStartMonitoring, onS
   const isResult = state === 'result';
   const isMonitoring = state === 'monitoring';
   const isIdle = state === 'idle';
+  const isError = state === 'error';
   const t = translations[language];
 
   if (isMonitoring) {
@@ -34,27 +35,29 @@ export function ActionButton({ state, onAnalyze, onReset, onStartMonitoring, onS
     );
   }
 
-  if (isResult) {
+  if (isResult || isError) {
     return (
       <div className="pt-3 flex-shrink-0 space-y-2.5">
-        <motion.button
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          onClick={onStartMonitoring}
-          className="w-full h-14 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 active:from-green-700 active:to-emerald-700 transition-all flex items-center justify-center gap-3 font-semibold text-base shadow-lg shadow-green-500/30"
-        >
-          <Play className="w-5 h-5 fill-current" />
-          {t.startMonitoring}
-        </motion.button>
+        {!isError && (
+          <motion.button
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            onClick={onStartMonitoring}
+            className="w-full h-14 rounded-2xl bg-gradient-to-r from-green-600 to-emerald-600 active:from-green-700 active:to-emerald-700 transition-all flex items-center justify-center gap-3 font-semibold text-base shadow-lg shadow-green-500/30"
+          >
+            <Play className="w-5 h-5 fill-current" />
+            {t.startMonitoring}
+          </motion.button>
+        )}
         <motion.button
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          onClick={onReset}
-          className="w-full h-12 rounded-2xl bg-gray-800 active:bg-gray-600 transition-colors flex items-center justify-center gap-3 font-medium"
+          onClick={isError ? onAnalyze : onReset}
+          className={`${isError ? 'h-14 bg-gradient-to-r from-purple-600 to-blue-600 font-semibold shadow-lg shadow-purple-500/30' : 'h-12 bg-gray-800 font-medium'} w-full rounded-2xl active:bg-gray-600 transition-colors flex items-center justify-center gap-3`}
         >
           <RotateCcw className="w-5 h-5" />
-          {t.analyzeAgain}
+          {isError ? t.retryAnalysis : t.analyzeAgain}
         </motion.button>
       </div>
     );

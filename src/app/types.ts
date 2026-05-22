@@ -264,10 +264,26 @@ export interface RuleBasedAnalysis {
 
 export type AnalysisEngine = 'ml' | 'rule-based' | 'rule-based-fallback';
 
+export type AnalysisRuntimeWarningCode =
+  | 'model_load_failed'
+  | 'onnx_runtime_failed'
+  | 'invalid_model_output'
+  | 'empty_analysis_result'
+  | 'stem_analysis_failed'
+  | 'source_detection_failed'
+  | 'analysis_timeout';
+
+export interface AnalysisRuntimeWarning {
+  code: AnalysisRuntimeWarningCode;
+  message: string;
+  recoverable: boolean;
+}
+
 export interface AnalysisResult {
   problems: DiagnosticProblem[];
   issues?: RuleBasedIssue[];
   eq_recommendations?: EQRecommendation[];
+  runtimeWarnings?: AnalysisRuntimeWarning[];
   detectedSources?: DetectedAudioSource[];
   stemMetrics?: StemMetric[];
   stemService?: StemServiceStatus;

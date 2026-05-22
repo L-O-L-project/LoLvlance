@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { AlertCircle, Radio, Sliders, Info, CheckCircle } from 'lucide-react';
+import { AlertCircle, Radio, Sliders, Info, CheckCircle, AlertTriangle } from 'lucide-react';
 import { linearToDbfs } from '../audio/audioUtils';
 import type {
   AnalysisResult,
@@ -22,6 +22,7 @@ interface ResultCardsProps {
 export function ResultCards({ result, language, isLive = false, features }: ResultCardsProps) {
   const t = translations[language];
   const transientIssues = isLive ? (result.monitoringInterpretation?.transientIssues ?? []) : [];
+  const hasFallbackWarning = result.runtimeWarnings?.some((warning) => warning.recoverable) ?? false;
 
   // Handle "no issues" case
   if (result.problems.length === 0 && transientIssues.length === 0) {
@@ -48,6 +49,7 @@ export function ResultCards({ result, language, isLive = false, features }: Resu
               <div className="text-2xl font-bold mb-2">{t.noIssues}</div>
               <div className="text-sm text-gray-400">{t.soundQualityGood}</div>
             </div>
+            <RuntimeWarningsCard result={result} language={language} />
             <StemServiceStatusCard result={result} language={language} centered />
             <DetectedSourcesCard
               detectedSources={result.detectedSources}
@@ -93,6 +95,10 @@ export function ResultCards({ result, language, isLive = false, features }: Resu
 
       <StemServiceStatusCard result={result} language={language} />
 
+      {hasFallbackWarning && (
+        <RuntimeWarningsCard result={result} language={language} />
+      )}
+
       <TransientWarningsCard
         transientIssues={transientIssues}
         language={language}
@@ -127,6 +133,40 @@ export function ResultCards({ result, language, isLive = false, features }: Resu
 
       <FeedbackWidget result={result} features={features} language={language} />
     </div>
+  );
+}
+
+function RuntimeWarningsCard({
+  result,
+  language
+}: {
+  result: AnalysisResult;
+  language: Language;
+}) {
+  const warnings = result.runtimeWarnings?.filter((warning) => warning.recoverable) ?? [];
+
+  if (warnings.length === 0) {
+    return null;
+  }
+
+  const t = translations[language];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="w-full rounded-xl border border-amber-500/25 bg-amber-500/10 p-4"
+    >
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+          <AlertTriangle className="w-4 h-4 text-amber-300" />
+        </div>
+        <div>
+          <div className="text-sm font-semibold text-amber-100">{t.fallbackTitle}</div>
+          <div className="mt-1 text-sm text-amber-100/80">{t.fallbackMessage}</div>
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -384,6 +424,8 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
   
   // Determine confidence level based on thresholds
   const confidenceLevel = problem.confidence >= 0.75 ? 'high' : problem.confidence >= 0.4 ? 'medium' : 'low';
+  const isLowConfidence = confidenceLevel === 'low';
+  const explanation = getProblemExplanation(problem.type, language);
   
   const confidenceColors = {
     high: 'bg-green-500/10 text-green-400 border-green-500/30',
@@ -449,12 +491,48 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
                 transition={{ duration: 0.3 }}
                 className={`inline-block px-3 py-1 rounded-full text-xs font-semibold border ${confidenceColors[confidenceLevel]}`}
               >
-                {confidencePercent}%
+                {t.confidence}: {confidencePercent}% ({t[confidenceLevel]})
               </motion.span>
             </div>
           </div>
         </div>
       </motion.div>
+
+      {/* RESULT SUMMARY: plain-language interpretation for non-technical users */}
+      <motion.div
+        layout={isLive}
+        className="bg-gray-800/50 border border-gray-700 rounded-xl p-4"
+      >
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs text-gray-400 mb-1">{t.resultSummary}</div>
+            <div className="text-sm text-gray-200 leading-relaxed">{explanation.what}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400 mb-1">{t.whyItMatters}</div>
+            <div className="text-sm text-gray-300 leading-relaxed">{explanation.why}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400 mb-1">{t.nextStep}</div>
+            <div className="text-sm text-gray-300 leading-relaxed">{explanation.next}</div>
+          </div>
+        </div>
+      </motion.div>
+
+      {isLowConfidence && (
+        <motion.div
+          layout={isLive}
+          className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-4"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-300 flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="text-sm font-semibold text-amber-100">{t.lowConfidenceTitle}</div>
+              <div className="mt-1 text-sm text-amber-100/80">{t.lowConfidenceMessage}</div>
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* LEVEL 2: SOURCE TAGS - compact and scannable */}
       {problem.sources.length > 0 && (
@@ -570,4 +648,57 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
       )}
     </motion.div>
   );
+}
+
+function getProblemExplanation(type: DiagnosticProblem['type'], language: Language) {
+  const isKo = language === 'ko';
+  const explanations: Record<DiagnosticProblem['type'], { what: string; why: string; next: string }> = {
+    muddy: isKo
+      ? { what: '저역과 저중역이 쌓여 소리가 흐릿하게 들릴 수 있습니다.', why: '라이브에서는 보컬과 킥, 베이스의 구분이 어려워지고 전체 음압만 커질 수 있습니다.', next: '베이스/킥/건반의 저중역을 조금 줄이고 문제가 줄어드는지 확인하세요.' }
+      : { what: 'Low and low-mid energy may be building up, making the mix feel cloudy.', why: 'In a live mix this can hide vocals, kick, and bass definition while only adding loudness.', next: 'Try reducing low-mids on bass, kick, or keys and check whether the mix clears up.' },
+    harsh: isKo
+      ? { what: '고역 또는 존재감 대역이 강해 귀에 거칠게 들릴 수 있습니다.', why: '라이브에서는 피로감이 빠르게 생기고 보컬/기타/심벌이 과하게 튈 수 있습니다.', next: '가장 튀는 소스를 찾고 3-8 kHz 부근을 좁게 줄여 보세요.' }
+      : { what: 'Upper-mid or high-frequency energy may be too strong.', why: 'Live audiences can hear this as sharpness or fatigue, especially from vocal, guitar, or cymbals.', next: 'Find the loudest bright source and try a narrow reduction around 3-8 kHz.' },
+    buried: isKo
+      ? { what: '중요한 소스가 다른 악기에 가려 앞으로 나오지 못할 수 있습니다.', why: '라이브에서는 보컬이나 리드 악기의 전달력이 떨어집니다.', next: '대상 소스를 조금 올리거나 경쟁 소스의 1-4 kHz 대역을 줄여 보세요.' }
+      : { what: 'An important source may be masked by other instruments.', why: 'In live sound this reduces intelligibility and makes lead parts hard to follow.', next: 'Raise the target slightly or carve 1-4 kHz from competing sources.' },
+    imbalance: isKo
+      ? { what: '레벨 또는 톤 밸런스가 한쪽으로 치우쳐 있습니다.', why: '관객 위치에 따라 특정 악기만 과하게 들리거나 전체 믹스가 불안정해질 수 있습니다.', next: '드럼, 베이스, 보컬의 상대 레벨을 먼저 맞춘 뒤 EQ를 조정하세요.' }
+      : { what: 'The mix may be tilted in level or tone.', why: 'In a venue this can make one source dominate and make the whole mix feel unstable.', next: 'Recheck relative levels for drums, bass, and vocal before making deeper EQ moves.' },
+    boomy: isKo
+      ? { what: '저역 울림이 과해 둥둥거리게 들릴 수 있습니다.', why: '공간 공진과 겹치면 작은 조정도 크게 들릴 수 있습니다.', next: '80-180 Hz 부근을 조금 줄이고 룸 반응을 확인하세요.' }
+      : { what: 'Low-frequency resonance may be making the mix boom.', why: 'Room modes can exaggerate this in live spaces.', next: 'Try a small reduction around 80-180 Hz and listen from the room.' },
+    thin: isKo
+      ? { what: '저역 또는 바디감이 부족해 얇게 들릴 수 있습니다.', why: '라이브에서는 힘이 부족하고 작은 스피커처럼 느껴질 수 있습니다.', next: '소스 레벨을 확인한 뒤 80-250 Hz를 필요한 만큼만 보강하세요.' }
+      : { what: 'The sample may lack low-end weight or body.', why: 'Live mixes can feel weak or small when this happens.', next: 'Check source level first, then add only the needed amount around 80-250 Hz.' },
+    boxy: isKo
+      ? { what: '중저역 공진 때문에 답답하거나 상자 같은 톤이 날 수 있습니다.', why: '보컬과 기타가 좁고 닫힌 느낌으로 들릴 수 있습니다.', next: '300-600 Hz 부근을 좁게 줄여 보세요.' }
+      : { what: 'Low-mid resonance may be creating a boxed-in tone.', why: 'Vocals and guitars can sound closed or small in the room.', next: 'Try a narrow cut around 300-600 Hz.' },
+    nasal: isKo
+      ? { what: '중역 피크 때문에 콧소리처럼 들릴 수 있습니다.', why: '보컬 명료도는 남아도 자연스러움이 떨어집니다.', next: '800 Hz-1.5 kHz 부근을 조금 줄여 보세요.' }
+      : { what: 'A midrange peak may be creating a nasal tone.', why: 'This keeps things audible but less natural.', next: 'Try a small cut around 800 Hz-1.5 kHz.' },
+    sibilant: isKo
+      ? { what: '치찰음이 과하게 튈 수 있습니다.', why: '라이브에서는 보컬이 날카롭고 피곤하게 들립니다.', next: '보컬 채널의 디에서 또는 5-10 kHz를 확인하세요.' }
+      : { what: 'Sibilance may be jumping out too much.', why: 'Live vocals can become sharp and tiring.', next: 'Check vocal de-essing or the 5-10 kHz range.' },
+    dull: isKo
+      ? { what: '고역 정보가 부족해 답답하게 들릴 수 있습니다.', why: '라이브에서는 선명도와 공간감이 줄어듭니다.', next: '먼저 과한 저중역을 줄이고, 필요하면 8-12 kHz를 조금 더하세요.' }
+      : { what: 'The sample may lack top-end clarity.', why: 'Live mixes can lose openness and detail.', next: 'First reduce excess low-mids, then add a small amount around 8-12 kHz if needed.' },
+    vocal_buried: isKo
+      ? { what: '보컬이 반주에 묻힐 수 있습니다.', why: '가사 전달이 약해져 공연의 중심이 흐려집니다.', next: '보컬 레벨과 2-4 kHz 존재감, 경쟁 악기 레벨을 확인하세요.' }
+      : { what: 'The vocal may be covered by the band.', why: 'Lyrics and lead focus can become hard to follow.', next: 'Check vocal level, 2-4 kHz presence, and competing instrument levels.' },
+    guitar_harsh: isKo
+      ? { what: '기타 존재감 대역이 과하게 튈 수 있습니다.', why: '보컬과 심벌까지 함께 거칠게 느껴질 수 있습니다.', next: '기타의 2-5 kHz를 좁게 줄여 보세요.' }
+      : { what: 'Guitar presence may be too aggressive.', why: 'This can make the whole mix feel sharp alongside vocal and cymbals.', next: 'Try a narrow reduction around 2-5 kHz on guitar.' },
+    bass_muddy: isKo
+      ? { what: '베이스가 저중역을 많이 차지할 수 있습니다.', why: '킥과 보컬의 윤곽이 흐려질 수 있습니다.', next: '베이스의 120-300 Hz를 정리하고 킥과의 역할을 나누세요.' }
+      : { what: 'Bass may be occupying too much low-mid space.', why: 'Kick and vocal definition can disappear.', next: 'Clean up 120-300 Hz on bass and separate it from the kick.' },
+    drums_overpower: isKo
+      ? { what: '드럼이 전체 믹스를 과하게 지배할 수 있습니다.', why: '다른 악기와 보컬이 뒤로 밀립니다.', next: '드럼 버스 레벨과 심벌/스네어 피크를 먼저 확인하세요.' }
+      : { what: 'Drums may be dominating the mix.', why: 'Vocals and instruments can get pushed behind the kit.', next: 'Check drum bus level and cymbal/snare peaks first.' },
+    keys_masking: isKo
+      ? { what: '건반이 중역을 넓게 차지해 다른 소스를 가릴 수 있습니다.', why: '보컬이나 기타가 선명하게 나오기 어렵습니다.', next: '건반 패드의 중역을 줄이거나 스테레오/레벨을 정리하세요.' }
+      : { what: 'Keys may be filling too much midrange space.', why: 'Vocals or guitars can struggle to cut through.', next: 'Reduce midrange on pads or rebalance keys width and level.' }
+  };
+
+  return explanations[type];
 }

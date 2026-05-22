@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Loader2, Mic } from 'lucide-react';
 import { Header } from './components/Header';
 import { ActionButton } from './components/ActionButton';
 import { ResultCards } from './components/ResultCards';
@@ -17,14 +18,18 @@ import type {
 } from './types';
 import { EQVisualization } from './components/EQVisualization';
 
-type AppState = 'idle' | 'listening' | 'result' | 'monitoring';
+type AppState = 'idle' | 'listening' | 'result' | 'monitoring' | 'error';
+type AnalysisPhase = 'idle' | 'requesting_microphone' | 'recording' | 'analyzing' | 'complete' | 'failed';
 
 const ANALYSIS_WINDOW_MS = 3000;
+const ANALYSIS_TIMEOUT_MS = 12000;
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>('idle');
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [language, setLanguage] = useState<Language>('en');
+  const [analysisPhase, setAnalysisPhase] = useState<AnalysisPhase>('idle');
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const analysisTimeoutRef = useRef<number | null>(null);
   const analysisRunIdRef = useRef(0);
 
@@ -63,30 +68,56 @@ export default function App() {
   const handleAnalyze = async () => {
     analysisRunIdRef.current += 1;
     clearAnalysisTimer();
+    setAnalysisPhase('requesting_microphone');
+    setAnalysisError(null);
 
     const isReady = await requestMicrophoneAccess();
 
     if (!isReady) {
+      setAnalysisPhase('failed');
       return;
     }
 
     setResult(null);
     setAppState('listening');
+    setAnalysisPhase('recording');
 
     const activeRunId = analysisRunIdRef.current;
 
     analysisTimeoutRef.current = window.setTimeout(() => {
       void (async () => {
-        const nextResult = await analyseCurrentBuffer();
+        setAnalysisPhase('analyzing');
 
-        if (activeRunId !== analysisRunIdRef.current) {
-          return;
+        try {
+          const nextResult = await withTimeout(
+            analyseCurrentBuffer(),
+            ANALYSIS_TIMEOUT_MS,
+            t.analysisTimeoutMessage
+          );
+
+          if (activeRunId !== analysisRunIdRef.current) {
+            return;
+          }
+
+          if (nextResult.problems.length === 0 && (nextResult.runtimeWarnings?.some((warning) => warning.code === 'empty_analysis_result') ?? false)) {
+            setAnalysisError(t.emptyAnalysisMessage);
+          }
+
+          setResult(nextResult);
+          setAppState('result');
+          setAnalysisPhase('complete');
+        } catch (error) {
+          if (activeRunId !== analysisRunIdRef.current) {
+            return;
+          }
+
+          setAnalysisError(error instanceof Error ? error.message : t.analysisFailedMessage);
+          setAppState('error');
+          setAnalysisPhase('failed');
+        } finally {
+          analysisTimeoutRef.current = null;
+          stopCapture();
         }
-
-        setResult(nextResult);
-        setAppState('result');
-        analysisTimeoutRef.current = null;
-        stopCapture();
       })();
     }, ANALYSIS_WINDOW_MS);
   };
@@ -97,6 +128,8 @@ export default function App() {
     stopCapture();
     setAppState('idle');
     setResult(null);
+    setAnalysisPhase('idle');
+    setAnalysisError(null);
   };
 
   const handleStartMonitoring = async () => {
@@ -109,6 +142,7 @@ export default function App() {
     }
 
     setAppState('monitoring');
+    setAnalysisPhase('complete');
   };
 
   const handleStopMonitoring = () => {
@@ -117,6 +151,8 @@ export default function App() {
     stopMonitoring();
     setAppState('idle');
     setResult(null);
+    setAnalysisPhase('idle');
+    setAnalysisError(null);
   };
 
   const toggleLanguage = () => {
@@ -212,6 +248,13 @@ export default function App() {
                   />
                 )}
 
+                <AnalysisStatusCard
+                  phase={analysisPhase}
+                  appState={appState}
+                  language={language}
+                  errorMessage={analysisError}
+                />
+
                 {(appState === 'result' || appState === 'monitoring') && result && (
                   <ResultCards
                     result={result}
@@ -241,6 +284,110 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+function AnalysisStatusCard({
+  phase,
+  appState,
+  language,
+  errorMessage
+}: {
+  phase: AnalysisPhase;
+  appState: AppState;
+  language: Language;
+  errorMessage: string | null;
+}) {
+  if (phase === 'idle' || phase === 'complete' || appState === 'monitoring') {
+    return null;
+  }
+
+  const t = translations[language];
+  const status = getAnalysisStatusCopy(phase, t, errorMessage);
+  const Icon = status.icon;
+
+  return (
+    <div className={`rounded-2xl border p-4 ${status.className}`}>
+      <div className="flex items-start gap-3">
+        <div className="w-11 h-11 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0">
+          <Icon className={`w-5 h-5 ${status.spin ? 'animate-spin' : ''}`} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-white">{status.title}</div>
+          <div className="mt-1 text-sm text-gray-300 leading-relaxed">{status.message}</div>
+          {status.hint && (
+            <div className="mt-2 text-xs text-gray-400">{status.hint}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getAnalysisStatusCopy(
+  phase: AnalysisPhase,
+  t: typeof translations.en,
+  errorMessage: string | null
+) {
+  if (phase === 'requesting_microphone') {
+    return {
+      title: t.microphoneWaitingTitle,
+      message: t.microphoneWaitingMessage,
+      hint: t.microphoneWaitingHint,
+      className: 'border-cyan-500/25 bg-cyan-500/10',
+      icon: Mic,
+      spin: false
+    };
+  }
+
+  if (phase === 'recording') {
+    return {
+      title: t.recordingTitle,
+      message: t.recordingMessage,
+      hint: t.recordingHint,
+      className: 'border-purple-500/25 bg-purple-500/10',
+      icon: Mic,
+      spin: false
+    };
+  }
+
+  if (phase === 'analyzing') {
+    return {
+      title: t.modelAnalyzingTitle,
+      message: t.modelAnalyzingMessage,
+      hint: t.modelAnalyzingHint,
+      className: 'border-blue-500/25 bg-blue-500/10',
+      icon: Loader2,
+      spin: true
+    };
+  }
+
+  return {
+    title: t.analysisFailedTitle,
+    message: errorMessage ?? t.analysisFailedMessage,
+    hint: t.analysisFailedHint,
+    className: 'border-amber-500/30 bg-amber-500/10',
+    icon: AlertTriangle,
+    spin: false
+  };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: number | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error(message));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
 }
 
 function getHeaderStatus({

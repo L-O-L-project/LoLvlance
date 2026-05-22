@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AnalysisResult,
   AnalysisEngine,
+  AnalysisRuntimeWarning,
   BufferedAudioSnapshot,
   DetectedAudioSource,
   ExtractedAudioFeatures,
@@ -113,6 +114,20 @@ function buildEmptyAnalysisResult(engine: AnalysisEngine = 'rule-based-fallback'
     eq_recommendations: [],
     engine,
     timestamp: Date.now()
+  };
+}
+
+function appendRuntimeWarnings(result: AnalysisResult, warnings: AnalysisRuntimeWarning[]) {
+  if (warnings.length === 0) {
+    return result;
+  }
+
+  return {
+    ...result,
+    runtimeWarnings: [
+      ...(result.runtimeWarnings ?? []),
+      ...warnings
+    ]
   };
 }
 
@@ -386,14 +401,43 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     const extractedFeatures = extractCurrentFeatures(snapshot);
     const mlInferencePromise = ENABLE_MODEL
       ? analyzeWithMlInference(extractedFeatures)
-      : Promise.resolve<AnalysisResult | null>(null);
-    const [mlResult, stemAnalysis] = await Promise.all([
+      : Promise.resolve({ result: null });
+    const runtimeWarnings: AnalysisRuntimeWarning[] = [];
+    const [mlResponse, stemAnalysis] = await Promise.all([
       mlInferencePromise,
-      detectStemSeparatedSources(nativeSnapshot)
+      detectStemSeparatedSources(nativeSnapshot).catch((error) => {
+        runtimeWarnings.push({
+          code: 'stem_analysis_failed',
+          message: error instanceof Error ? error.message : String(error),
+          recoverable: true
+        });
+
+        return {
+          connected: false,
+          detectedSources: [],
+          stems: []
+        };
+      })
     ]);
+
+    if (mlResponse.failure) {
+      runtimeWarnings.push({
+        code: mlResponse.failure.code,
+        message: mlResponse.failure.message,
+        recoverable: true
+      });
+    }
+
     const shouldRunFallbackTagger = !stemAnalysis.connected || stemAnalysis.detectedSources.length < 3;
     const fallbackDetectedSources = shouldRunFallbackTagger
-      ? await detectOpenSourceAudioSources(nativeSnapshot)
+      ? await detectOpenSourceAudioSources(nativeSnapshot).catch((error) => {
+          runtimeWarnings.push({
+            code: 'source_detection_failed',
+            message: error instanceof Error ? error.message : String(error),
+            recoverable: true
+          });
+          return [];
+        })
       : [];
     const detectedSources = mergeInstrumentDetections(
       stemAnalysis.detectedSources,
@@ -401,16 +445,16 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       stemAnalysis.stems
     );
 
-    if (mlResult) {
-      return enrichAnalysisResult(mlResult, {
+    if (mlResponse.result) {
+      return appendRuntimeWarnings(enrichAnalysisResult(mlResponse.result, {
         detectedSources,
         stemConnected: stemAnalysis.connected,
         stemModel: stemAnalysis.model,
         stemMetrics: stemAnalysis.stems
-      });
+      }), runtimeWarnings);
     }
 
-    return enrichAnalysisResult(
+    const fallbackResult = enrichAnalysisResult(
       buildAnalysisResult(snapshot, extractedFeatures, 'rule-based-fallback'),
       {
         detectedSources,
@@ -419,6 +463,8 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         stemMetrics: stemAnalysis.stems
       }
     );
+
+    return appendRuntimeWarnings(fallbackResult, runtimeWarnings);
   }, [extractCurrentFeatures, getBufferedAudio, getNativeBufferedAudio]);
 
   const runMonitoringPass = useCallback(async () => {

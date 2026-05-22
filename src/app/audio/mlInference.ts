@@ -31,6 +31,16 @@ interface ParsedModelOutputs {
   modelEqGainDb: number;
 }
 
+interface MlInferenceFailure {
+  code: 'model_load_failed' | 'onnx_runtime_failed' | 'invalid_model_output';
+  message: string;
+}
+
+interface MlInferenceResponse {
+  result: AnalysisResult | null;
+  failure?: MlInferenceFailure;
+}
+
 let ortModulePromise: Promise<OrtModule> | null = null;
 let sessionPromise: Promise<import('onnxruntime-web').InferenceSession> | null = null;
 let hasLoggedModelReady = false;
@@ -67,13 +77,13 @@ export async function warmUpMlInference() {
 
 export async function analyzeWithMlInference(
   features: ExtractedAudioFeatures
-): Promise<AnalysisResult | null> {
+): Promise<MlInferenceResponse> {
   if (!ENABLE_MODEL) {
     console.info('[audio-ml]', createModelLogMetadata({
       status: 'skipped',
       reason: 'enableModel=false'
     }));
-    return null;
+    return { result: null };
   }
 
   if (features.melBinCount !== MODEL_MEL_BIN_COUNT) {
@@ -82,17 +92,23 @@ export async function analyzeWithMlInference(
       expectedMelBins: MODEL_MEL_BIN_COUNT,
       receivedMelBins: features.melBinCount
     });
-    return null;
+    return {
+      result: null,
+      failure: {
+        code: 'invalid_model_output',
+        message: `Feature shape mismatch: expected ${MODEL_MEL_BIN_COUNT} mel bins, received ${features.melBinCount}.`
+      }
+    };
   }
 
   if (features.rms < MODEL_SILENCE_RMS_THRESHOLD) {
-    return {
+    return { result: {
       problems: [],
       issues: [],
       eq_recommendations: [],
       engine: 'ml',
       timestamp: Date.now()
-    };
+    } };
   }
 
   try {
@@ -114,10 +130,14 @@ export async function analyzeWithMlInference(
     });
 
     logMlInference(result.ml_output);
-    return result;
+    return { result };
   } catch (error) {
-    console.warn('[audio-ml] Inference failed. Falling back to the rule-based engine.', createModelLogMetadata(), error);
-    return null;
+    const failure = classifyMlInferenceFailure(error);
+    console.warn('[audio-ml] Inference failed. Falling back to the rule-based engine.', createModelLogMetadata({ failure }), error);
+    return {
+      result: null,
+      failure
+    };
   }
 }
 
@@ -192,6 +212,39 @@ function readTensorData(value: unknown, outputName: string, expectedLength?: num
   }
 
   return values;
+}
+
+function classifyMlInferenceFailure(error: unknown): MlInferenceFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes('unexpected tensor')
+    || normalized.includes('missing tensor')
+    || normalized.includes('missing scalar')
+    || normalized.includes('non-finite')
+  ) {
+    return {
+      code: 'invalid_model_output',
+      message
+    };
+  }
+
+  if (
+    normalized.includes('wasm')
+    || normalized.includes('ort-wasm')
+    || normalized.includes('webassembly')
+  ) {
+    return {
+      code: 'onnx_runtime_failed',
+      message
+    };
+  }
+
+  return {
+    code: 'model_load_failed',
+    message
+  };
 }
 
 function readScalar(value: unknown, outputName: string) {
