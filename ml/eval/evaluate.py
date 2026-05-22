@@ -58,6 +58,7 @@ class OnnxAudioModel:
         self.model_path = model_path
         self.session = ort.InferenceSession(model_path.as_posix(), providers=["CPUExecutionProvider"])
         self.preprocessing_config = PreprocessingConfig(mel_bin_count=DEFAULT_MEL_BIN_COUNT)
+        self.contract = validate_onnx_contract(self.session)
 
     def predict(self, audio_path: Path) -> dict[str, np.ndarray]:
         features = extract_audio_features_from_path(audio_path, config=self.preprocessing_config)
@@ -70,6 +71,8 @@ class OnnxAudioModel:
 
         issue_probs = np.asarray(output_map["issue_probs"], dtype=np.float32)
         source_probs = np.asarray(output_map["source_probs"], dtype=np.float32)
+        eq_freq = np.asarray(output_map["eq_freq"], dtype=np.float32)
+        eq_gain_db = np.asarray(output_map["eq_gain_db"], dtype=np.float32)
 
         if issue_probs.ndim != 2 or issue_probs.shape[0] != 1 or issue_probs.shape[1] != len(ISSUE_LABELS):
             raise RuntimeError(
@@ -83,11 +86,78 @@ class OnnxAudioModel:
             raise RuntimeError("issue_probs contains non-finite values.")
         if not np.isfinite(source_probs).all():
             raise RuntimeError("source_probs contains non-finite values.")
+        if eq_freq.ndim != 2 or eq_freq.shape[0] != 1 or eq_freq.shape[1] != 1:
+            raise RuntimeError(f"Expected eq_freq shape (1, 1), received {tuple(eq_freq.shape)}.")
+        if eq_gain_db.ndim != 2 or eq_gain_db.shape[0] != 1 or eq_gain_db.shape[1] != 1:
+            raise RuntimeError(f"Expected eq_gain_db shape (1, 1), received {tuple(eq_gain_db.shape)}.")
+        if not np.isfinite(eq_freq).all():
+            raise RuntimeError("eq_freq contains non-finite values.")
+        if not np.isfinite(eq_gain_db).all():
+            raise RuntimeError("eq_gain_db contains non-finite values.")
 
         return {
             "issue_probs": issue_probs[0],
             "source_probs": source_probs[0],
         }
+
+
+def validate_onnx_contract(session: ort.InferenceSession) -> dict[str, Any]:
+    inputs = session.get_inputs()
+    outputs = session.get_outputs()
+    input_by_name = {entry.name: entry for entry in inputs}
+    output_by_name = {entry.name: entry for entry in outputs}
+
+    required_input = "log_mel_spectrogram"
+    required_outputs = {
+        "issue_probs": len(ISSUE_LABELS),
+        "source_probs": len(SOURCE_LABELS),
+        "eq_freq": 1,
+        "eq_gain_db": 1,
+    }
+
+    if required_input not in input_by_name:
+        raise RuntimeError(f"Missing ONNX input '{required_input}'. Found: {sorted(input_by_name)}")
+
+    model_input = input_by_name[required_input]
+    if model_input.type != "tensor(float)":
+        raise RuntimeError(f"Expected '{required_input}' dtype tensor(float), received {model_input.type}.")
+    if len(model_input.shape) != 3 or model_input.shape[2] != DEFAULT_MEL_BIN_COUNT:
+        raise RuntimeError(
+            f"Expected '{required_input}' shape [batch, time, {DEFAULT_MEL_BIN_COUNT}], received {model_input.shape}."
+        )
+
+    for output_name, class_count in required_outputs.items():
+      if output_name not in output_by_name:
+          raise RuntimeError(f"Missing ONNX output '{output_name}'. Found: {sorted(output_by_name)}")
+
+      output = output_by_name[output_name]
+      if output.type != "tensor(float)":
+          raise RuntimeError(f"Expected '{output_name}' dtype tensor(float), received {output.type}.")
+      if len(output.shape) != 2:
+          raise RuntimeError(f"Expected '{output_name}' to be rank-2, received shape {output.shape}.")
+      static_last_dim = output.shape[1]
+      if isinstance(static_last_dim, int) and static_last_dim != class_count:
+          raise RuntimeError(
+              f"Expected '{output_name}' last dimension {class_count}, received {static_last_dim}."
+          )
+
+    return {
+        "input": {
+            "name": model_input.name,
+            "type": model_input.type,
+            "shape": list(model_input.shape),
+        },
+        "outputs": {
+            name: {
+                "type": output_by_name[name].type,
+                "shape": list(output_by_name[name].shape),
+            }
+            for name in required_outputs
+        },
+        "issue_class_count": len(ISSUE_LABELS),
+        "source_class_count": len(SOURCE_LABELS),
+        "status": "ok",
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -493,6 +563,7 @@ def build_report(
     model_path: Path,
     issue_thresholds: dict[str, float],
     source_thresholds: dict[str, float],
+    onnx_contract: dict[str, Any],
 ) -> dict[str, Any]:
     issue_metrics = compute_metrics(predictions, "issue", ISSUE_LABELS, "issue")
     source_metrics = compute_metrics(predictions, "source", SOURCE_LABELS, "source")
@@ -503,6 +574,7 @@ def build_report(
         "note": SMALL_GOLDEN_SET_WARNING,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_path": model_path.as_posix(),
+        "onnx_contract": onnx_contract,
         "sample_count": len(predictions),
         "thresholds": {
             "issue_thresholds": issue_thresholds,
@@ -953,7 +1025,7 @@ def main() -> int:
     model = OnnxAudioModel(args.model_path)
     predictions = evaluate_samples(samples, model, issue_thresholds, source_thresholds)
 
-    report = build_report(predictions, args.model_path, issue_thresholds, source_thresholds)
+    report = build_report(predictions, args.model_path, issue_thresholds, source_thresholds, model.contract)
     baseline_payload = strip_samples_from_report(report) if args.write_baseline else load_baseline(args.baseline_path)
     gate_config = build_gate_config(args)
     report["gate"] = build_gate_report(report, baseline_payload, gate_config=gate_config)
