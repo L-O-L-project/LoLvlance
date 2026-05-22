@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LoLvlance Golden Audio Labels",
+  "type": "object",
+  "required": ["schema_version", "dataset_version", "label_sets", "samples"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "dataset_version": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "label_sets": {
+      "type": "object",
+      "required": ["issue_labels", "source_labels", "severity_values", "quality_values"],
+      "additionalProperties": false,
+      "properties": {
+        "issue_labels": {
+          "type": "array",
+          "items": {
+            "enum": ["muddy", "harsh", "buried", "boomy", "thin", "boxy", "nasal", "sibilant", "dull"]
+          },
+          "uniqueItems": true
+        },
+        "source_labels": {
+          "type": "array",
+          "items": {
+            "enum": ["vocal", "guitar", "bass", "drums", "keys"]
+          },
+          "uniqueItems": true
+        },
+        "severity_values": {
+          "type": "array",
+          "items": {
+            "enum": ["none", "low", "medium", "high", "unknown"]
+          },
+          "uniqueItems": true
+        },
+        "quality_values": {
+          "type": "array",
+          "items": {
+            "enum": ["reviewed", "single_reviewer", "unreviewed", "synthetic", "unknown"]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "collection_targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mvp_regression_min_samples": { "type": "integer", "minimum": 0 },
+        "validation_min_samples": { "type": "integer", "minimum": 0 },
+        "production_eval_min_samples": { "type": "integer", "minimum": 0 },
+        "issue_samples_per_class_validation": { "type": "integer", "minimum": 0 },
+        "source_samples_per_class_validation": { "type": "integer", "minimum": 0 },
+        "issue_samples_per_class_production": { "type": "integer", "minimum": 0 },
+        "source_samples_per_class_production": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sample_id",
+          "file",
+          "split",
+          "expected_issue",
+          "expected_source",
+          "severity",
+          "label_quality",
+          "recording_condition",
+          "device",
+          "flags"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sample_id": { "type": "string" },
+          "file": { "type": "string" },
+          "split": {
+            "enum": ["regression", "validation", "production_eval", "holdout"]
+          },
+          "expected_issue": {
+            "type": "array",
+            "items": {
+              "enum": ["muddy", "harsh", "buried", "boomy", "thin", "boxy", "nasal", "sibilant", "dull"]
+            },
+            "uniqueItems": true
+          },
+          "expected_source": {
+            "type": "array",
+            "items": {
+              "enum": ["vocal", "guitar", "bass", "drums", "keys"]
+            },
+            "uniqueItems": true
+          },
+          "severity": {
+            "enum": ["none", "low", "medium", "high", "unknown"]
+          },
+          "label_quality": {
+            "enum": ["reviewed", "single_reviewer", "unreviewed", "synthetic", "unknown"]
+          },
+          "reviewer_notes": { "type": "string" },
+          "recording_condition": {
+            "type": "object",
+            "required": ["environment", "content_type", "sample_rate_hz", "duration_seconds"],
+            "additionalProperties": false,
+            "properties": {
+              "environment": {
+                "enum": ["live_venue", "rehearsal_room", "studio", "synthetic_fixture", "unknown"]
+              },
+              "content_type": {
+                "enum": ["full_mix", "stem", "solo_source", "silence", "noise", "unknown"]
+              },
+              "sample_rate_hz": {
+                "type": ["integer", "null"],
+                "minimum": 1
+              },
+              "duration_seconds": {
+                "type": ["number", "null"],
+                "minimum": 0
+              }
+            }
+          },
+          "device": {
+            "type": "object",
+            "required": ["microphone_type", "device_model", "browser", "os"],
+            "additionalProperties": false,
+            "properties": {
+              "microphone_type": {
+                "enum": ["phone_builtin", "laptop_builtin", "usb_microphone", "audio_interface", "measurement_microphone", "unknown"]
+              },
+              "device_model": { "type": "string" },
+              "browser": { "type": "string" },
+              "os": { "type": "string" }
+            }
+          },
+          "flags": {
+            "type": "object",
+            "required": ["contains_clipping", "contains_silence", "high_noise_floor", "low_confidence_label"],
+            "additionalProperties": false,
+            "properties": {
+              "contains_clipping": { "type": "boolean" },
+              "contains_silence": { "type": "boolean" },
+              "high_noise_floor": { "type": "boolean" },
+              "low_confidence_label": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

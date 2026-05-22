@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_version": "goldens-v0.1",
+  "description": "Central manifest for LoLvlance golden audio labels. Existing labels come from per-sample metadata.json files. Unknown collection fields are intentionally not inferred.",
+  "label_sets": {
+    "issue_labels": ["muddy", "harsh", "buried", "boomy", "thin", "boxy", "nasal", "sibilant", "dull"],
+    "source_labels": ["vocal", "guitar", "bass", "drums", "keys"],
+    "severity_values": ["none", "low", "medium", "high", "unknown"],
+    "quality_values": ["reviewed", "single_reviewer", "unreviewed", "synthetic", "unknown"]
+  },
+  "collection_targets": {
+    "mvp_regression_min_samples": 30,
+    "validation_min_samples": 250,
+    "production_eval_min_samples": 1000,
+    "issue_samples_per_class_validation": 25,
+    "source_samples_per_class_validation": 40,
+    "issue_samples_per_class_production": 100,
+    "source_samples_per_class_production": 150
+  },
+  "samples": [
+    {
+      "sample_id": "full_mix_01",
+      "file": "full_mix_01/full_mix_01.wav",
+      "split": "regression",
+      "expected_issue": ["muddy", "boomy", "dull"],
+      "expected_source": ["vocal", "guitar", "bass", "drums", "keys"],
+      "severity": "high",
+      "label_quality": "unknown",
+      "reviewer_notes": "Imported from existing per-sample metadata.json.",
+      "recording_condition": {
+        "environment": "synthetic_fixture",
+        "content_type": "full_mix",
+        "sample_rate_hz": null,
+        "duration_seconds": null
+      },
+      "device": {
+        "microphone_type": "unknown",
+        "device_model": "unknown",
+        "browser": "unknown",
+        "os": "unknown"
+      },
+      "flags": {
+        "contains_clipping": false,
+        "contains_silence": false,
+        "high_noise_floor": false,
+        "low_confidence_label": true
+      }
+    },
+    {
+      "sample_id": "guitar_presence_01",
+      "file": "guitar_presence_01/guitar_presence_01.wav",
+      "split": "regression",
+      "expected_issue": ["thin"],
+      "expected_source": ["keys"],
+      "severity": "medium",
+      "label_quality": "unknown",
+      "reviewer_notes": "Imported from existing per-sample metadata.json. Sample id and source label should be reviewed for consistency.",
+      "recording_condition": {
+        "environment": "synthetic_fixture",
+        "content_type": "full_mix",
+        "sample_rate_hz": null,
+        "duration_seconds": null
+      },
+      "device": {
+        "microphone_type": "unknown",
+        "device_model": "unknown",
+        "browser": "unknown",
+        "os": "unknown"
+      },
+      "flags": {
+        "contains_clipping": false,
+        "contains_silence": false,
+        "high_noise_floor": false,
+        "low_confidence_label": true
+      }
+    },
+    {
+      "sample_id": "vocal_sibilant_01",
+      "file": "vocal_sibilant_01/vocal_sibilant_01.wav",
+      "split": "regression",
+      "expected_issue": ["muddy", "harsh", "buried", "thin", "sibilant"],
+      "expected_source": ["vocal", "keys"],
+      "severity": "high",
+      "label_quality": "unknown",
+      "reviewer_notes": "Imported from existing per-sample metadata.json.",
+      "recording_condition": {
+        "environment": "synthetic_fixture",
+        "content_type": "full_mix",
+        "sample_rate_hz": null,
+        "duration_seconds": null
+      },
+      "device": {
+        "microphone_type": "unknown",
+        "device_model": "unknown",
+        "browser": "unknown",
+        "os": "unknown"
+      },
+      "flags": {
+        "contains_clipping": false,
+        "contains_silence": false,
+        "high_noise_floor": false,
+        "low_confidence_label": true
+      }
+    }
+  ]
+}

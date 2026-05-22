@@ -14,6 +14,13 @@ The active model is documented as trained on MUSAN and OpenMIC-2018 weak labels.
 
 The current golden regression set contains only three labeled audio clips under `eval/goldens/`. These clips are useful for detecting obvious regressions and class-bias failures, but they are not enough to claim real-world accuracy.
 
+Dataset collection and evaluation workflow are documented in:
+
+- `eval/goldens/README.md`
+- `eval/goldens/labels.json`
+- `eval/goldens/labels.schema.json`
+- `ml/eval/EVALUATION_PROTOCOL.md`
+
 ## Browser ONNX Contract
 
 Input:
