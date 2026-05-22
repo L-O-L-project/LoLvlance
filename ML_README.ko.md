@@ -9,6 +9,36 @@
 - golden 평가는 `eval/goldens/labels.json`을 중앙 manifest로 사용하고, 기존 per-sample `metadata.json` fallback을 유지합니다.
 - `npm audit`는 취약점 0개이고 `npm run build`는 성공합니다.
 
+## ML 아키텍처 / 시각화 요약
+
+```mermaid
+flowchart TD
+  Mic[브라우저 마이크 입력] --> Capture[AudioWorklet / ScriptProcessor 캡처]
+  Capture --> Buffer[rolling buffer]
+  Buffer --> Quality[오디오 품질 검증<br/>무음 / 짧은 입력 / clipping / invalid sample]
+  Quality --> Features[log-mel feature extraction<br/>3초 / 64 mel bins]
+  Features --> Onnx[ONNX Runtime Web]
+  Onnx --> Outputs[issue_probs / source_probs / eq_freq / eq_gain_db]
+  Outputs --> Parse[shape / dtype / finite 값 검증]
+  Parse --> Post[threshold / confidence / derived diagnosis]
+  Quality --> Fallback[rule-based fallback]
+  Post --> Merge[source merge + stabilization]
+  Fallback --> Merge
+  Merge --> UI[ResultCards + EQVisualization]
+```
+
+런타임 결과는 raw tensor로 직접 노출되지 않습니다.
+
+| 데이터 | UI 표시 | 파일 | 설명 |
+|---|---|---|---|
+| `issue_probs`, derived diagnosis | 문제 카드 | `src/app/components/ResultCards.tsx` | 문제명, confidence, 설명, 라이브 영향, 다음 조치를 표시합니다. |
+| `source_probs`, stem/YAMNet fallback | source chip / stem card | `src/app/components/ResultCards.tsx` | source를 가능성 높음/불확실/추정으로 구분합니다. |
+| `eq_freq`, `eq_gain_db`, rule/source-aware EQ | EQ 제안 및 EQ curve | `src/app/components/ResultCards.tsx`, `src/app/components/EQVisualization.tsx` | 브라우저는 아직 single-band 호환 EQ 계약을 사용합니다. |
+| `AnalyserNode`, RMS | oscilloscope / RTA / output meter | `src/app/components/EQVisualization.tsx` | 모니터링 시각화이며, 단독으로 모델 근거를 의미하지 않습니다. |
+| fallback warning | fallback 안내 카드 | `src/app/components/ResultCards.tsx` | 모델/런타임 실패를 사용자 친화적으로 표시합니다. |
+
+`AudioVisualization.tsx`는 이전 장식형 bar visual입니다. 현재 주요 분석 시각화는 `EQVisualization.tsx`입니다.
+
 이 문서는 LoLvlance의 ML 관련 영역만 별도로 설명합니다.
 
 - 현재 런타임 모델 상태와 학습 결과

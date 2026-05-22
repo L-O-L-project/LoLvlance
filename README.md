@@ -92,6 +92,21 @@ Mic Input
   -> UI
 ```
 
+```mermaid
+flowchart LR
+  Mic[Mic input] --> Capture[Browser capture]
+  Capture --> Buffer[Rolling buffers]
+  Buffer --> Features[Log-mel features]
+  Features --> ML[ONNX model when enabled]
+  Features --> Rules[Rule fallback]
+  ML --> Merge[Post-processing + source merge]
+  Rules --> Merge
+  Merge --> Cards[ResultCards]
+  Merge --> Viz[EQVisualization]
+```
+
+The main visual surfaces are `ResultCards` for diagnosis, confidence, source, and next-step text, and `EQVisualization` for oscilloscope/RTA/output-meter/EQ guidance. These visuals explain the analysis state; they are not independent proof of model accuracy.
+
 ### Runtime Responsibilities
 
 - `src/app/hooks/useMonitoring.ts`
@@ -190,7 +205,7 @@ The browser serves the `v0.1-real-data` checkpoint and consumes a compatibility 
 - `eq_freq`
 - `eq_gain_db`
 
-This model was trained on real public audio and has been validated through the CI evaluation gate. It produces meaningful source and issue predictions on real-world audio.
+This model was trained on real public audio and has a valid browser ONNX contract. The current 3-sample golden gate still flags class-bias issues, so the model should not be described as production-accurate.
 
 ### Python Training Path
 
@@ -214,7 +229,7 @@ The active browser model (`v0.1-real-data`) is the first real-data checkpoint. I
 - source detection is functional on real audio
 - issue detection generalizes beyond synthetic data
 
-The model is still conservative on some issue labels (`boxy`, `nasal`, `thin`) where training data was sparse. A follow-up training run with FSD50K added is currently in progress (`v0.2-fsd50k-extended`).
+The model is still weak on some issue/source labels and requires a larger labeled golden set before model-quality claims or model replacement are justified.
 
 <a id="audio-pipeline"></a>
 ## 5. Audio Pipeline

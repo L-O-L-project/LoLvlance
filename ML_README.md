@@ -41,6 +41,31 @@ Korean version: `ML_README.ko.md`
 <a id="model-architecture"></a>
 ## 1. Model Architecture
 
+### Runtime ML Architecture Diagram
+
+```mermaid
+flowchart TD
+  Mic[Browser microphone input] --> Capture[AudioWorklet / ScriptProcessor capture]
+  Capture --> NativeBuffer[Native sample-rate rolling buffer]
+  Capture --> ResampledBuffer[16 kHz rolling buffer]
+  ResampledBuffer --> Quality[Audio quality gate<br/>empty / short / silence / clipping / finite samples]
+  Quality --> Features[Log-mel feature extraction<br/>3.0 s window / 25 ms frame / 10 ms hop / 64 mel bins]
+  Features --> Onnx[ONNX Runtime Web<br/>log_mel_spectrogram]
+  Onnx --> Outputs[issue_probs / source_probs / eq_freq / eq_gain_db]
+  Outputs --> Parse[Strict output parser<br/>shape / dtype / finite / probability range]
+  Parse --> Post[Post-processing<br/>thresholds / derived diagnoses / confidence tier]
+  NativeBuffer --> Stem[Stem service if available]
+  NativeBuffer --> Tags[MediaPipe/YAMNet fallback source tags]
+  Quality --> Fallback[Rule-based fallback]
+  Post --> Merge[Source merge + monitoring stabilization]
+  Stem --> Merge
+  Tags --> Merge
+  Fallback --> Merge
+  Merge --> UI[ResultCards + EQVisualization]
+```
+
+This is the browser runtime path. It does not mean the deployed model is production-accurate; the active ONNX artifact is still MVP-grade and guarded by fallback logic.
+
 ### Active Browser Runtime Contract
 
 The browser ONNX contract remains:
@@ -59,6 +84,57 @@ The current Python model implementation lives in `ml/model.py` and supports:
 - `AudioIntelligenceNet`
 - `ProductionAudioIntelligenceNet`
 - `LightweightAudioAnalysisNet`
+
+### Training / Export Architecture Diagram
+
+```mermaid
+flowchart TD
+  Data[Public or collected audio manifests] --> Pre[ml/preprocessing.py<br/>resample + log-mel]
+  Data --> Degrade[ml/degradation.py<br/>clean ratio + issue simulation]
+  Pre --> Dataset[ml/dataset.py<br/>issue/source targets + masks]
+  Degrade --> Dataset
+  Dataset --> Train[ml/train.py<br/>multi-task training]
+  Train --> Checkpoint[PyTorch checkpoints<br/>ml/checkpoints/*.pt]
+  Checkpoint --> Export[ml/export_to_onnx.py]
+  Export --> Contract[Browser ONNX contract<br/>issue/source probs + single-band EQ summary]
+  Contract --> Validate[ml/validate_onnx_contract.py]
+  Validate --> Eval[ml/eval/evaluate.py<br/>labels.json golden manifest]
+  Eval --> Promote{Promotion gate}
+  Promote -->|pass only| PublicModel[public/models/lightweight_audio_model.production.onnx]
+  Promote -->|fail| Archive[Keep candidate out of production]
+```
+
+Candidate checkpoints must pass contract validation and manifest-based evaluation before replacing the production ONNX file. The most recent candidate checked during this audit was not promoted.
+
+### Runtime Visualization Mapping
+
+The ML output is not shown as raw tensors. It is transformed into user-facing visual elements:
+
+| Runtime data | UI surface | File | Notes |
+|---|---|---|---|
+| `issue_probs` and derived diagnoses | Problem cards | `src/app/components/ResultCards.tsx` | Shows issue name, confidence tier, plain-language explanation, live-sound impact, and next action. |
+| `source_probs`, stem service output, YAMNet fallback tags | Detected source chips and stem/source cards | `src/app/components/ResultCards.tsx` | Sources are labeled as likely, uncertain, or fallback estimates. |
+| `eq_freq`, `eq_gain_db`, rule fallback EQ, source-aware EQ | Suggested adjustments and EQ bands | `src/app/components/ResultCards.tsx`, `src/app/components/EQVisualization.tsx` | Browser runtime still uses a single-band compatibility EQ summary, plus rule/source-aware guidance. |
+| Live analyser node and latest RMS | Oscilloscope, RTA, output meter | `src/app/components/EQVisualization.tsx` | Uses browser `AnalyserNode`; it is a monitoring visualization, not model evidence by itself. |
+| Runtime warnings and fallback reasons | Fallback warning card | `src/app/components/ResultCards.tsx` | Keeps model/runtime failures visible without exposing raw technical errors to users. |
+
+`AudioVisualization.tsx` is an older decorative bar visual. The primary current analysis visual is `EQVisualization.tsx`, which renders the oscilloscope, real-time analyzer, output meter, and EQ adjustment curve.
+
+### Browser Result Flow Diagram
+
+```mermaid
+flowchart LR
+  Result[AnalysisResult] --> Warnings[Runtime warning card]
+  Result --> Sources[Detected source chips]
+  Result --> Stems[Stem/source energy cards]
+  Result --> EQ[Source-aware EQ suggestions]
+  Result --> Problems[Problem cards]
+  Problems --> Confidence[Confidence tier]
+  Problems --> Explanation[What it means / why it matters / try next]
+  Result --> Feedback[FeedbackWidget]
+```
+
+The UI deliberately avoids claiming certainty. Low-confidence and fallback-only results remain labeled as such.
 
 ### Encoder Variants
 
