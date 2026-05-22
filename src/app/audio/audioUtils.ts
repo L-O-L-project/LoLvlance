@@ -91,7 +91,10 @@ export function appendToCircularBuffer(
   let nextFilledLength = filledLength;
 
   for (let index = 0; index < input.length; index += 1) {
-    target[nextWriteIndex] = input[index];
+    const sample = input[index];
+    target[nextWriteIndex] = Number.isFinite(sample)
+      ? Math.max(-1, Math.min(1, sample))
+      : 0;
     nextWriteIndex = (nextWriteIndex + 1) % target.length;
     nextFilledLength = Math.min(target.length, nextFilledLength + 1);
   }
@@ -149,7 +152,7 @@ export function calculateRms(samples: Float32Array): number {
   let sum = 0;
 
   for (let index = 0; index < samples.length; index += 1) {
-    const value = samples[index];
+    const value = Number.isFinite(samples[index]) ? samples[index] : 0;
     sum += value * value;
   }
 
@@ -160,7 +163,8 @@ export function calculatePeak(samples: Float32Array): number {
   let peak = 0;
 
   for (let index = 0; index < samples.length; index += 1) {
-    peak = Math.max(peak, Math.abs(samples[index]));
+    const value = Number.isFinite(samples[index]) ? samples[index] : 0;
+    peak = Math.max(peak, Math.abs(value));
   }
 
   return peak;
@@ -170,12 +174,13 @@ export function createBufferedAudioSnapshot(
   samples: Float32Array,
   sampleRate = TARGET_SAMPLE_RATE
 ): BufferedAudioSnapshot {
+  const safeSamples = sanitizeSamples(samples);
   const durationMs = sampleRate > 0 ? (samples.length / sampleRate) * 1000 : 0;
-  const rms = calculateRms(samples);
-  const peak = calculatePeak(samples);
+  const rms = calculateRms(safeSamples);
+  const peak = calculatePeak(safeSamples);
 
   return {
-    samples,
+    samples: safeSamples,
     sampleRate,
     durationMs,
     rms,
@@ -183,4 +188,17 @@ export function createBufferedAudioSnapshot(
     dbRms: linearToDbfs(rms),
     crestFactor: rms > 0 ? peak / rms : 1
   };
+}
+
+function sanitizeSamples(samples: Float32Array) {
+  const sanitized = new Float32Array(samples.length);
+
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index];
+    sanitized[index] = Number.isFinite(sample)
+      ? Math.max(-1, Math.min(1, sample))
+      : 0;
+  }
+
+  return sanitized;
 }

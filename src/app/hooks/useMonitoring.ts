@@ -25,6 +25,7 @@ import {
   MODEL_MEL_BIN_COUNT,
   warmUpMlInference
 } from '../audio/mlInference';
+import { analyzeAudioQuality } from '../audio/audioQuality';
 import {
   ENABLE_MODEL,
   getModelRuntimeSnapshot,
@@ -57,8 +58,14 @@ import {
   advanceMonitoringMlRuntimeState,
   createInitialMonitoringMlRuntimeState
 } from '../audio/monitoringStabilization';
+import {
+  CLIPPING_PEAK_THRESHOLD,
+  FALLBACK_MAX_CONFIDENCE,
+  MIN_RULE_AUDIO_DURATION_MS,
+  SILENCE_DBFS_THRESHOLD
+} from '../audio/mlThresholds';
 
-const SILENCE_THRESHOLD_DBFS = -38;
+const SILENCE_THRESHOLD_DBFS = SILENCE_DBFS_THRESHOLD;
 const CAPTURE_WORKLET_NAME = 'soundfix-microphone-capture';
 const CAPTURE_WORKLET_SOURCE = `
 class SoundFixMicrophoneCaptureProcessor extends AudioWorkletProcessor {
@@ -117,6 +124,29 @@ function buildEmptyAnalysisResult(engine: AnalysisEngine = 'rule-based-fallback'
   };
 }
 
+function buildInvalidAudioResult(
+  snapshot: BufferedAudioSnapshot,
+  reason: 'insufficient_audio' | 'silent_audio' | 'invalid_audio'
+): AnalysisResult {
+  return {
+    ...buildEmptyAnalysisResult('rule-based-fallback'),
+    runtimeWarnings: [{
+      code: reason,
+      message: reason,
+      recoverable: true
+    }],
+    diagnostics: {
+      runtimeBackend: 'fallback',
+      outputParsingStatus: 'skipped',
+      fallbackReason: reason,
+      audioDurationMs: snapshot.durationMs,
+      rms: snapshot.rms,
+      peak: snapshot.peak,
+      resultConfidenceTier: 'invalid'
+    }
+  };
+}
+
 function appendRuntimeWarnings(result: AnalysisResult, warnings: AnalysisRuntimeWarning[]) {
   if (warnings.length === 0) {
     return result;
@@ -129,6 +159,18 @@ function appendRuntimeWarnings(result: AnalysisResult, warnings: AnalysisRuntime
       ...warnings
     ]
   };
+}
+
+function withDiagnosticsLog(result: AnalysisResult) {
+  if (result.diagnostics) {
+    console.info('[audio-analysis:diagnostics]', {
+      engine: result.engine,
+      warnings: result.runtimeWarnings?.map((warning) => warning.code) ?? [],
+      ...result.diagnostics
+    });
+  }
+
+  return result;
 }
 
 function buildAnalysisResult(
@@ -145,10 +187,22 @@ function buildAnalysisResult(
   logRuleBasedAnalysis(ruleBasedAnalysis);
   const problems = ruleAnalysisToDiagnosticProblems(ruleBasedAnalysis);
 
-  if (snapshot.crestFactor < 3) {
+    if (snapshot.peak >= CLIPPING_PEAK_THRESHOLD) {
+      problems.push({
+        type: 'imbalance',
+        confidence: 0.58,
+        sources: ['overall'],
+        details: ['transient_overload'],
+        actions: [
+          'Input is close to clipping. Lower the preamp, interface, or master send before making EQ decisions.'
+        ]
+      });
+    }
+
+    if (snapshot.crestFactor < 3) {
     problems.push({
       type: 'imbalance',
-      confidence: Math.min(0.9, 0.6 + (3 - snapshot.crestFactor) * 0.15),
+      confidence: Math.min(FALLBACK_MAX_CONFIDENCE, 0.55 + (3 - snapshot.crestFactor) * 0.12),
       sources: ['overall'],
       details: ['transient_overload'],
       actions: [
@@ -210,7 +264,8 @@ function mergeInstrumentDetections(
     merged.set(entry.source, {
       source: entry.source,
       confidence: Number(weightedConfidence.toFixed(2)),
-      labels: uniqueInOrder(entry.labels)
+      labels: uniqueInOrder(entry.labels),
+      quality: getSourceQuality(weightedConfidence)
     });
   });
 
@@ -222,7 +277,8 @@ function mergeInstrumentDetections(
         merged.set(entry.source, {
           ...entry,
           confidence: Number(entry.confidence.toFixed(2)),
-          labels: uniqueInOrder(entry.labels)
+          labels: uniqueInOrder(entry.labels),
+          quality: entry.quality ?? getSourceQuality(entry.confidence)
         });
       }
       return;
@@ -232,7 +288,8 @@ function mergeInstrumentDetections(
     merged.set(entry.source, {
       source: entry.source,
       confidence: Number(Math.max(existing.confidence, blendedConfidence).toFixed(2)),
-      labels: uniqueInOrder([...existing.labels, ...entry.labels])
+      labels: uniqueInOrder([...existing.labels, ...entry.labels]),
+      quality: getSourceQuality(Math.max(existing.confidence, blendedConfidence))
     });
   });
 
@@ -244,7 +301,8 @@ function mergeInstrumentDetections(
     merged.set(stem.source, {
       source: stem.source,
       confidence: Number(clamp(stem.energyRatio * 0.8 + stem.rms * 3.5, 0.1, 0.72).toFixed(2)),
-      labels: [stem.stem]
+      labels: [stem.stem],
+      quality: 'fallback'
     });
   });
 
@@ -391,20 +449,44 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
   }, [getBufferedAudio]);
 
   const analyseCurrentBuffer = useCallback(async (): Promise<AnalysisResult> => {
+    const preprocessingStart = performance.now();
     const snapshot = getBufferedAudio(MONITORING_WINDOW_SECONDS);
     const nativeSnapshot = getNativeBufferedAudio(MONITORING_WINDOW_SECONDS);
+    const audioQuality = analyzeAudioQuality(snapshot);
+    const preprocessingDurationMs = performance.now() - preprocessingStart;
 
-    if (snapshot.durationMs < MONITORING_MIN_BUFFER_MS || snapshot.dbRms < SILENCE_THRESHOLD_DBFS) {
-      return buildEmptyAnalysisResult('rule-based-fallback');
+    if (!audioQuality.usableForFallback || audioQuality.issues.includes('too_short') && snapshot.durationMs < MIN_RULE_AUDIO_DURATION_MS) {
+      return withDiagnosticsLog(buildInvalidAudioResult(snapshot, 'invalid_audio'));
+    }
+
+    if (audioQuality.issues.includes('silent')) {
+      return withDiagnosticsLog(buildInvalidAudioResult(snapshot, 'silent_audio'));
+    }
+
+    if (snapshot.durationMs < MONITORING_MIN_BUFFER_MS) {
+      return withDiagnosticsLog(buildInvalidAudioResult(snapshot, 'insufficient_audio'));
     }
 
     const extractedFeatures = extractCurrentFeatures(snapshot);
     const mlInferencePromise = ENABLE_MODEL
       ? analyzeWithMlInference(extractedFeatures)
       : Promise.resolve({ result: null });
-    const runtimeWarnings: AnalysisRuntimeWarning[] = [];
+    const runtimeWarnings: AnalysisRuntimeWarning[] = audioQuality.issues.includes('clipped')
+      ? [{
+          code: 'clipped_audio',
+          message: 'Input peak is close to clipping; confidence is reduced.',
+          recoverable: true
+        }]
+      : [];
+    const inferenceStart = performance.now();
     const [mlResponse, stemAnalysis] = await Promise.all([
-      mlInferencePromise,
+      audioQuality.usableForMl ? mlInferencePromise : Promise.resolve({
+        result: null,
+        failure: {
+          code: 'invalid_model_output' as const,
+          message: `Audio quality blocked ML: ${audioQuality.issues.join(', ')}`
+        }
+      }),
       detectStemSeparatedSources(nativeSnapshot).catch((error) => {
         runtimeWarnings.push({
           code: 'stem_analysis_failed',
@@ -419,6 +501,7 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
         };
       })
     ]);
+    const inferenceDurationMs = performance.now() - inferenceStart;
 
     if (mlResponse.failure) {
       runtimeWarnings.push({
@@ -446,12 +529,28 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
     );
 
     if (mlResponse.result) {
-      return appendRuntimeWarnings(enrichAnalysisResult(mlResponse.result, {
+      const enriched = enrichAnalysisResult(mlResponse.result, {
         detectedSources,
         stemConnected: stemAnalysis.connected,
         stemModel: stemAnalysis.model,
         stemMetrics: stemAnalysis.stems
-      }), runtimeWarnings);
+      });
+      return withDiagnosticsLog(appendRuntimeWarnings({
+        ...enriched,
+        diagnostics: {
+          ...(enriched.diagnostics ?? {}),
+          modelEnabled: ENABLE_MODEL,
+          modelLoaded: true,
+          runtimeBackend: 'wasm',
+          preprocessingDurationMs: Number(preprocessingDurationMs.toFixed(1)),
+          inferenceDurationMs: Number(inferenceDurationMs.toFixed(1)),
+          outputParsingStatus: 'ok',
+          audioDurationMs: Number(snapshot.durationMs.toFixed(0)),
+          rms: Number(snapshot.rms.toFixed(5)),
+          peak: Number(snapshot.peak.toFixed(5)),
+          clippingRatio: Number(audioQuality.clippingRatio.toFixed(4))
+        }
+      }, runtimeWarnings));
     }
 
     const fallbackResult = enrichAnalysisResult(
@@ -464,7 +563,23 @@ export function useMonitoring(onUpdate: (result: AnalysisResult) => void) {
       }
     );
 
-    return appendRuntimeWarnings(fallbackResult, runtimeWarnings);
+    return withDiagnosticsLog(appendRuntimeWarnings({
+      ...fallbackResult,
+      diagnostics: {
+        modelEnabled: ENABLE_MODEL,
+        modelLoaded: false,
+        runtimeBackend: 'fallback',
+        preprocessingDurationMs: Number(preprocessingDurationMs.toFixed(1)),
+        inferenceDurationMs: Number(inferenceDurationMs.toFixed(1)),
+        outputParsingStatus: mlResponse.failure ? 'failed' : 'skipped',
+        fallbackReason: mlResponse.failure?.code ?? 'model_disabled_or_no_ml_result',
+        audioDurationMs: Number(snapshot.durationMs.toFixed(0)),
+        rms: Number(snapshot.rms.toFixed(5)),
+        peak: Number(snapshot.peak.toFixed(5)),
+        clippingRatio: Number(audioQuality.clippingRatio.toFixed(4)),
+        resultConfidenceTier: 'fallback'
+      }
+    }, runtimeWarnings));
   }, [extractCurrentFeatures, getBufferedAudio, getNativeBufferedAudio]);
 
   const runMonitoringPass = useCallback(async () => {
@@ -894,4 +1009,16 @@ function uniqueInOrder<T>(values: T[]) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function getSourceQuality(confidence: number): NonNullable<DetectedAudioSource['quality']> {
+  if (confidence >= 0.55) {
+    return 'likely';
+  }
+
+  if (confidence >= 0.25) {
+    return 'uncertain';
+  }
+
+  return 'fallback';
 }

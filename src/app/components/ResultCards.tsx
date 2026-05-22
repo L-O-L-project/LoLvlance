@@ -11,6 +11,10 @@ import type {
 } from '../types';
 import { type Language, translations } from '../translations';
 import { FeedbackWidget } from './FeedbackWidget';
+import {
+  HIGH_CONFIDENCE_THRESHOLD,
+  MEDIUM_CONFIDENCE_THRESHOLD
+} from '../audio/mlThresholds';
 
 interface ResultCardsProps {
   result: AnalysisResult;
@@ -250,6 +254,9 @@ function DetectedSourcesCard({
             title={entry.labels.join(', ')}
           >
             {(t[entry.source as keyof typeof t] || entry.source)} {Math.round(entry.confidence * 100)}%
+            <span className="ml-1 text-[11px] text-cyan-100/70">
+              {getSourceQualityLabel(entry.quality, entry.confidence, t)}
+            </span>
           </span>
         ))}
       </div>
@@ -423,7 +430,7 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
   const confidencePercent = Math.round(problem.confidence * 100);
   
   // Determine confidence level based on thresholds
-  const confidenceLevel = problem.confidence >= 0.75 ? 'high' : problem.confidence >= 0.4 ? 'medium' : 'low';
+  const confidenceLevel = problem.confidence >= HIGH_CONFIDENCE_THRESHOLD ? 'high' : problem.confidence >= MEDIUM_CONFIDENCE_THRESHOLD ? 'medium' : 'low';
   const isLowConfidence = confidenceLevel === 'low';
   const explanation = getProblemExplanation(problem.type, language);
   
@@ -648,6 +655,24 @@ function ProblemCard({ problem, language, isPrimary, delay, isLive = false }: Pr
       )}
     </motion.div>
   );
+}
+
+function getSourceQualityLabel(
+  quality: DetectedAudioSource['quality'],
+  confidence: number,
+  t: typeof translations.en
+) {
+  const effectiveQuality = quality ?? (confidence >= 0.55 ? 'likely' : confidence >= 0.25 ? 'uncertain' : 'fallback');
+
+  if (effectiveQuality === 'likely') {
+    return t.likelySource;
+  }
+
+  if (effectiveQuality === 'uncertain') {
+    return t.sourceUncertain;
+  }
+
+  return t.fallbackSourceEstimate;
 }
 
 function getProblemExplanation(type: DiagnosticProblem['type'], language: Language) {

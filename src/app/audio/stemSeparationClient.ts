@@ -3,11 +3,16 @@ import type {
   DetectedAudioSource,
   StemMetric
 } from '../types';
+import {
+  SILENCE_RMS_THRESHOLD,
+  SOURCE_LIKELY_CONFIDENCE,
+  SOURCE_UNCERTAIN_CONFIDENCE
+} from './mlThresholds';
 
 const STEM_SERVICE_URL = (import.meta.env.VITE_STEM_SERVICE_URL as string | undefined)
   ?? 'http://127.0.0.1:8765';
 const STEM_SERVICE_MIN_DURATION_MS = 900;
-const STEM_SERVICE_MIN_RMS = 0.012;
+const STEM_SERVICE_MIN_RMS = SILENCE_RMS_THRESHOLD;
 const HEALTH_TIMEOUT_MS = 1200;
 const ANALYZE_TIMEOUT_MS = 20000;
 const RETRY_BACKOFF_MS = 15000;
@@ -75,6 +80,11 @@ export async function detectStemSeparatedSources(snapshot: BufferedAudioSnapshot
     const payload = await response.json() as StemServiceResponse;
     const detectedSources = Array.isArray(payload.detectedSources)
       ? payload.detectedSources.filter(isDetectedSource)
+        .map((source) => ({
+          ...source,
+          confidence: clamp(source.confidence, 0, 1),
+          quality: getSourceQuality(source.confidence)
+        }))
       : [];
     const stems = Array.isArray(payload.stems)
       ? payload.stems.filter(isStemMetric)
@@ -186,6 +196,22 @@ function isDetectedSource(value: unknown): value is DetectedAudioSource {
     && 'confidence' in value
     && 'labels' in value
   );
+}
+
+function getSourceQuality(confidence: number): DetectedAudioSource['quality'] {
+  if (confidence >= SOURCE_LIKELY_CONFIDENCE) {
+    return 'likely';
+  }
+
+  if (confidence >= SOURCE_UNCERTAIN_CONFIDENCE) {
+    return 'uncertain';
+  }
+
+  return 'fallback';
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function isStemMetric(value: unknown): value is StemMetric {

@@ -13,6 +13,14 @@ import type {
 import { problemCauseMap } from '../data/diagnosticData';
 import { buildMlInferenceOutput } from './diagnosisPostProcessing';
 import {
+  HIGH_CONFIDENCE_THRESHOLD,
+  LOW_CONFIDENCE_THRESHOLD,
+  MEDIUM_CONFIDENCE_THRESHOLD,
+  MIN_USABLE_CONFIDENCE,
+  SOURCE_LIKELY_CONFIDENCE,
+  SOURCE_UNCERTAIN_CONFIDENCE
+} from './mlThresholds';
+import {
   ISSUE_DEFAULT_THRESHOLDS,
   ISSUE_LABELS,
   ISSUE_PROFILES,
@@ -41,6 +49,7 @@ export interface BuildMlAnalysisResultParams {
   issueScores: Record<TrainableIssueLabel, number>;
   sourceScores: Record<SourceLabel, number>;
   eq: MlPresentationEq;
+  confidenceTier?: 'high' | 'medium' | 'low' | 'invalid';
   activeIssues?: readonly TrainableIssueLabel[];
   displayedSource?: SourceLabel | null;
   detectedSources?: DetectedAudioSource[];
@@ -50,6 +59,7 @@ export function buildMlAnalysisResult({
   issueScores,
   sourceScores,
   eq,
+  confidenceTier,
   activeIssues,
   displayedSource,
   detectedSources
@@ -73,8 +83,9 @@ export function buildMlAnalysisResult({
       ? [...activeIssues]
       : ISSUE_LABELS.filter((label) => (problemIssueScores[label] ?? 0) >= ISSUE_DEFAULT_THRESHOLDS[label])
   ).sort((left, right) => (problemIssueScores[right] ?? 0) - (problemIssueScores[left] ?? 0));
+  const usableIssueLabels = issueLabels.filter((label) => (problemIssueScores[label] ?? 0) >= MIN_USABLE_CONFIDENCE);
 
-  const issueProblems = issueLabels.map((label, index) => buildIssueProblem({
+  const issueProblems = usableIssueLabels.map((label, index) => buildIssueProblem({
     label,
     score: problemIssueScores[label] ?? 0,
     detectedSources: effectiveDetectedSources,
@@ -99,6 +110,13 @@ export function buildMlAnalysisResult({
     eq_recommendations: eqRecommendations,
     detectedSources: effectiveDetectedSources,
     ml_output: mlOutput,
+    diagnostics: {
+      topIssueLabel: getTopScore(issueScores).label,
+      topIssueConfidence: Number(getTopScore(issueScores).score.toFixed(4)),
+      topSourceLabel: getTopScore(sourceScores).label,
+      topSourceConfidence: Number(getTopScore(sourceScores).score.toFixed(4)),
+      resultConfidenceTier: confidenceTier ?? getConfidenceTier(Math.max(getTopScore(issueScores).score, getTopScore(sourceScores).score))
+    },
     engine: 'ml',
     timestamp: Date.now()
   };
@@ -136,7 +154,12 @@ export function buildDetectedSourcesFromScores(
     .map(([source, confidence]) => ({
       source,
       confidence,
-      labels: [`model:${source}`]
+      labels: [`model:${source}`],
+      quality: confidence >= SOURCE_LIKELY_CONFIDENCE
+        ? 'likely'
+        : confidence >= SOURCE_UNCERTAIN_CONFIDENCE
+          ? 'uncertain'
+          : 'fallback'
     }))
     .sort((left, right) => {
       if (dominantSource && left.source === dominantSource && right.source !== dominantSource) {
@@ -193,7 +216,7 @@ function buildIssueProblem({
 
   return {
     type: label,
-    confidence: Number(score.toFixed(2)),
+    confidence: Number(Math.min(0.92, score).toFixed(2)),
     sources,
     details: profile.details,
     actions: [`${recommendation.freq_range} ${recommendation.gain}`, recommendation.reason]
@@ -212,7 +235,7 @@ function buildDerivedProblem(
 
   return {
     type: label,
-    confidence: Number(diagnosis.score.toFixed(2)),
+    confidence: Number(Math.min(0.88, diagnosis.score).toFixed(2)),
     sources: [source],
     details: problemCauseMap[label] ?? [],
     actions: diagnosis.explanation ? [diagnosis.explanation] : diagnosis.reasons
@@ -288,4 +311,26 @@ function formatGain(gainDb: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function getTopScore<T extends string>(scores: Record<T, number>) {
+  return Object.entries(scores)
+    .map(([label, score]) => ({ label: label as T, score: Number(score) }))
+    .sort((left, right) => right.score - left.score)[0];
+}
+
+function getConfidenceTier(score: number) {
+  if (score >= HIGH_CONFIDENCE_THRESHOLD) {
+    return 'high';
+  }
+
+  if (score >= MEDIUM_CONFIDENCE_THRESHOLD) {
+    return 'medium';
+  }
+
+  if (score >= LOW_CONFIDENCE_THRESHOLD) {
+    return 'low';
+  }
+
+  return 'invalid';
 }

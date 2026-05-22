@@ -108,6 +108,7 @@ export interface DetectedAudioSource {
   source: Instrument;
   confidence: number;
   labels: string[];
+  quality?: 'likely' | 'uncertain' | 'fallback';
 }
 
 export interface StemMetric {
@@ -268,6 +269,10 @@ export type AnalysisRuntimeWarningCode =
   | 'model_load_failed'
   | 'onnx_runtime_failed'
   | 'invalid_model_output'
+  | 'insufficient_audio'
+  | 'silent_audio'
+  | 'clipped_audio'
+  | 'invalid_audio'
   | 'empty_analysis_result'
   | 'stem_analysis_failed'
   | 'source_detection_failed'
@@ -277,6 +282,25 @@ export interface AnalysisRuntimeWarning {
   code: AnalysisRuntimeWarningCode;
   message: string;
   recoverable: boolean;
+}
+
+export interface AnalysisDiagnostics {
+  modelEnabled?: boolean;
+  modelLoaded?: boolean;
+  runtimeBackend?: 'wasm' | 'fallback' | 'unavailable';
+  preprocessingDurationMs?: number;
+  inferenceDurationMs?: number;
+  outputParsingStatus?: 'ok' | 'skipped' | 'failed';
+  fallbackReason?: string;
+  audioDurationMs?: number;
+  rms?: number;
+  peak?: number;
+  clippingRatio?: number;
+  topIssueLabel?: TrainableIssueLabel;
+  topIssueConfidence?: number;
+  topSourceLabel?: SourceLabel;
+  topSourceConfidence?: number;
+  resultConfidenceTier?: 'high' | 'medium' | 'low' | 'fallback' | 'invalid';
 }
 
 export interface AnalysisResult {
@@ -291,6 +315,7 @@ export interface AnalysisResult {
   ml_output?: MlInferenceOutput;
   monitoringInterpretation?: MonitoringInterpretation;
   monitoringStabilization?: MonitoringStabilizationDebug;
+  diagnostics?: AnalysisDiagnostics;
   engine?: AnalysisEngine;
   timestamp?: number;
 }

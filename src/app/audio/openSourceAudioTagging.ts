@@ -3,8 +3,13 @@ import type {
   DetectedAudioSource,
   Instrument
 } from '../types';
+import {
+  SILENCE_RMS_THRESHOLD,
+  SOURCE_LIKELY_CONFIDENCE,
+  SOURCE_UNCERTAIN_CONFIDENCE
+} from './mlThresholds';
 
-const SOURCE_DETECTION_MIN_RMS = 0.012;
+const SOURCE_DETECTION_MIN_RMS = SILENCE_RMS_THRESHOLD;
 const SOURCE_DETECTION_MIN_DURATION_MS = 900;
 const SOURCE_DETECTION_SCORE_THRESHOLD = 0.03;
 const SOURCE_DETECTION_DISPLAY_THRESHOLD = 0.06;
@@ -252,7 +257,16 @@ function aggregateClassificationResults(
           1
         ).toFixed(2)
       ),
-      labels: [...accumulator.labels].sort()
+      labels: [...accumulator.labels].sort(),
+      quality: getSourceQuality(
+        clamp(
+          accumulator.maxScore * 0.45
+            + Math.min(1, accumulator.totalScore) * 0.35
+            + Math.min(0.2, accumulator.labels.size * 0.05),
+          0,
+          1
+        )
+      )
     }))
     .sort((left, right) => right.confidence - left.confidence);
 
@@ -314,6 +328,18 @@ function logDetectedSources(
     })),
     topCategories
   });
+}
+
+function getSourceQuality(confidence: number): DetectedAudioSource['quality'] {
+  if (confidence >= SOURCE_LIKELY_CONFIDENCE) {
+    return 'likely';
+  }
+
+  if (confidence >= SOURCE_UNCERTAIN_CONFIDENCE) {
+    return 'uncertain';
+  }
+
+  return 'fallback';
 }
 
 function clamp(value: number, min: number, max: number) {

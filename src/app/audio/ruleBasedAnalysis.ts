@@ -7,10 +7,13 @@ import type {
   RuleBasedAnalysis,
   RuleBasedIssue
 } from '../types';
+import {
+  FALLBACK_MAX_CONFIDENCE,
+  SILENCE_RMS_THRESHOLD
+} from './mlThresholds';
 
 const LOG_EPSILON = 1e-6;
 const MIN_MEL_FREQUENCY = 20;
-const SILENCE_RMS_THRESHOLD = 0.012;
 
 const LOW_MID_BAND: FrequencyRange = { minHz: 200, maxHz: 500 };
 const HARSH_BAND: FrequencyRange = { minHz: 2000, maxHz: 6000 };
@@ -194,7 +197,7 @@ function detectBuried(metrics: BandMetrics) {
 }
 
 function createDetection(issue: RuleBasedIssue, ratio: number, threshold: number) {
-  const confidence = clamp(0.55 + normalizeSeverity(ratio, threshold) * 0.4, 0.55, 0.95);
+  const confidence = clamp(0.5 + normalizeSeverity(ratio, threshold) * 0.22, 0.5, FALLBACK_MAX_CONFIDENCE);
   const recommendation = ruleProfiles[issue].getRecommendation(confidence);
 
   return {
